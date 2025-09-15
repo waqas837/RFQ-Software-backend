@@ -1,0 +1,526 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Models\Company;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    /**
+     * Register a new user with role selection and company registration.
+     */
+    public function register(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:8|confirmed',
+            'phone' => 'nullable|string|max:20',
+            'position' => 'nullable|string|max:100',
+            'department' => 'nullable|string|max:100',
+            
+            // Company information
+            'company_name' => 'required|string|max:255',
+            'company_email' => 'required|email|max:255',
+            'company_phone' => 'nullable|string|max:20',
+            'company_address' => 'nullable|string|max:500',
+            'company_city' => 'nullable|string|max:100',
+            'company_state' => 'nullable|string|max:100',
+            'company_country' => 'nullable|string|max:100',
+            'company_postal_code' => 'nullable|string|max:20',
+            'company_website' => 'nullable|url|max:255',
+            'company_registration_number' => 'nullable|string|max:100',
+            'company_tax_id' => 'nullable|string|max:100',
+            'company_description' => 'nullable|string|max:1000',
+            
+            // Role selection
+            'role' => 'required|in:buyer,supplier',
+            
+            // Terms agreement
+            'agree_to_terms' => 'required|accepted',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            // Create or find company
+            $company = Company::firstOrCreate(
+                ['email' => $request->company_email],
+                [
+                    'name' => $request->company_name,
+                    'phone' => $request->company_phone,
+                    'address' => $request->company_address,
+                    'city' => $request->company_city,
+                    'state' => $request->company_state,
+                    'country' => $request->company_country,
+                    'postal_code' => $request->company_postal_code,
+                    'website' => $request->company_website,
+                    'registration_number' => $request->company_registration_number,
+                    'tax_id' => $request->company_tax_id,
+                    'description' => $request->company_description,
+                    'type' => $request->role,
+                    'status' => $request->role === 'supplier' ? 'pending_approval' : 'active',
+                ]
+            );
+
+            // Determine user status based on role
+            $userStatus = $request->role === 'supplier' ? 'pending' : 'active';
+
+            // Create user
+            $user = User::create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+                'phone' => $request->phone,
+                'position' => $request->position,
+                'department' => $request->department,
+                'role' => $request->role,
+                'status' => $userStatus,
+                'email_verified_at' => null, // Will be verified via email
+            ]);
+
+            // Assign role
+            $user->assignRole($request->role);
+
+            // Attach user to company
+            $user->companies()->attach($company->id);
+
+            // Generate email verification token
+            $verificationToken = Str::random(64);
+            $user->update(['email_verification_token' => $verificationToken]);
+
+            // Send email verification
+            $this->sendVerificationEmail($user, $verificationToken);
+
+            // Send admin notification for supplier approval (if supplier)
+            if ($request->role === 'supplier') {
+                $this->sendAdminApprovalNotification($user, $company);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $request->role === 'supplier' 
+                    ? 'Registration successful! Please check your email to verify your account. Your account will be activated after admin approval.'
+                    : 'Registration successful! Please check your email to verify your account.',
+                'data' => [
+                    'user' => $user->load('roles', 'companies'),
+                    'requires_approval' => $request->role === 'supplier',
+                    'email_verification_required' => true,
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Registration failed',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Verify email address.
+     */
+    public function verifyEmail(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'token' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid token',
+            ], 422);
+        }
+
+        $user = User::where('email_verification_token', $request->token)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid or expired verification token',
+            ], 400);
+        }
+
+        $user->update([
+            'email_verified_at' => now(),
+            'email_verification_token' => null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Email verified successfully!',
+        ]);
+    }
+
+    /**
+     * Resend verification email.
+     */
+    public function resendVerification(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid email',
+            ], 422);
+        }
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found',
+            ], 404);
+        }
+
+        if ($user->email_verified_at) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Email already verified',
+            ], 400);
+        }
+
+        // Generate new verification token
+        $verificationToken = Str::random(64);
+        $user->update(['email_verification_token' => $verificationToken]);
+
+        // Send verification email
+        $this->sendVerificationEmail($user, $verificationToken);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Verification email sent successfully!',
+        ]);
+    }
+
+    /**
+     * Check registration status.
+     */
+    public function checkStatus(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid email',
+            ], 422);
+        }
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'email_verified' => !is_null($user->email_verified_at),
+                'status' => $user->status,
+                'role' => $user->role,
+                'requires_approval' => $user->role === 'supplier' && $user->status === 'pending',
+            ]
+        ]);
+    }
+
+    /**
+     * Login user.
+     */
+    public function login(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        if (!Auth::attempt($request->only('email', 'password'))) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        $user = User::where('email', $request->email)->firstOrFail();
+        
+        // Check if email is verified - DISABLED FOR DEVELOPMENT
+        // if (!$user->email_verified_at) {
+        //     return response()->json([
+        //         'success' => false,
+        //         'message' => 'Please verify your email address before logging in.',
+        //         'email_verification_required' => true,
+        //     ], 401);
+        // }
+        
+        // Check if account is active
+        if ($user->status !== 'active') {
+            $message = $user->status === 'pending' 
+                ? 'Your account is pending admin approval. You will be notified once approved.'
+                : 'Your account is not active.';
+                
+            return response()->json([
+                'success' => false,
+                'message' => $message,
+                'status' => $user->status,
+            ], 401);
+        }
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        // Update last login
+        $user->update([
+            'last_login_at' => now(),
+            'last_login_ip' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Login successful',
+            'data' => [
+                'user' => $user->load('roles', 'companies'),
+                'token' => $token,
+                'token_type' => 'Bearer',
+            ]
+        ]);
+    }
+
+    /**
+     * Logout user.
+     */
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Logged out successfully'
+        ]);
+    }
+
+    /**
+     * Get authenticated user profile.
+     */
+    public function profile(Request $request)
+    {
+        $user = $request->user()->load('roles', 'companies');
+
+        return response()->json([
+            'success' => true,
+            'data' => $user
+        ]);
+    }
+
+    /**
+     * Update user profile.
+     */
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'position' => 'nullable|string|max:100',
+            'department' => 'nullable|string|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $user->update($request->only(['name', 'phone', 'position', 'department']));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Profile updated successfully',
+            'data' => $user->load('roles', 'companies')
+        ]);
+    }
+
+    /**
+     * Change password.
+     */
+    public function changePassword(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'current_password' => 'required',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $user = $request->user();
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Current password is incorrect'
+            ], 400);
+        }
+
+        $user->update([
+            'password' => Hash::make($request->password)
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password changed successfully'
+        ]);
+    }
+
+    /**
+     * Send password reset email.
+     */
+    public function forgotPassword(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid email',
+            ], 422);
+        }
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found',
+            ], 404);
+        }
+
+        // Generate reset token
+        $resetToken = Str::random(64);
+        $user->update(['password_reset_token' => $resetToken]);
+
+        // Send reset email
+        $this->sendPasswordResetEmail($user, $resetToken);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password reset email sent successfully!',
+        ]);
+    }
+
+    /**
+     * Reset password.
+     */
+    public function resetPassword(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'token' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $user = User::where('password_reset_token', $request->token)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid or expired reset token',
+            ], 400);
+        }
+
+        $user->update([
+            'password' => Hash::make($request->password),
+            'password_reset_token' => null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password reset successfully!',
+        ]);
+    }
+
+    /**
+     * Send verification email.
+     */
+    private function sendVerificationEmail($user, $token)
+    {
+        // For now, we'll just log the email. In production, you'd use a proper email service
+        Log::info("Verification email sent to {$user->email} with token: {$token}");
+        
+        // TODO: Implement actual email sending
+        // Mail::to($user->email)->send(new EmailVerificationMail($user, $token));
+    }
+
+    /**
+     * Send admin approval notification.
+     */
+    private function sendAdminApprovalNotification($user, $company)
+    {
+        // For now, we'll just log the notification. In production, you'd send to admin
+        Log::info("Admin approval required for supplier: {$user->email} from company: {$company->name}");
+        
+        // TODO: Implement actual admin notification
+        // Mail::to(admin@rfqsystem.com)->send(new SupplierApprovalRequest($user, $company));
+    }
+
+    /**
+     * Send password reset email.
+     */
+    private function sendPasswordResetEmail($user, $token)
+    {
+        // For now, we'll just log the email. In production, you'd use a proper email service
+        Log::info("Password reset email sent to {$user->email} with token: {$token}");
+        
+        // TODO: Implement actual email sending
+        // Mail::to($user->email)->send(new PasswordResetMail($user, $token));
+    }
+}
