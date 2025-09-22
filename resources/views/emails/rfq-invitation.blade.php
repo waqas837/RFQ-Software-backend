@@ -16,75 +16,98 @@
         .header {
             background-color: #f8f9fa;
             padding: 20px;
-            text-align: center;
-            border-radius: 5px;
+            border-radius: 8px;
+            margin-bottom: 20px;
         }
         .content {
-            padding: 20px;
             background-color: #ffffff;
+            padding: 20px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+        }
+        .rfq-details {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
         }
         .button {
             display: inline-block;
+            background-color: #6b7280 !important;
+            color: white !important;
             padding: 12px 24px;
-            background-color: #007bff;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            margin: 20px 0;
+            text-decoration: none !important;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+        .button:hover {
+            background-color: #4b5563 !important;
+            color: white !important;
+        }
+        a.button {
+            color: white !important;
+            text-decoration: none !important;
+        }
+        a.button:hover {
+            color: white !important;
+            text-decoration: none !important;
         }
         .footer {
             margin-top: 30px;
-            padding: 20px;
-            background-color: #f8f9fa;
-            text-align: center;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
             font-size: 12px;
-            color: #666;
-        }
-        .details {
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 20px 0;
+            color: #6b7280;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>Request for Quotation (RFQ)</h2>
-        <p>You have been invited to submit a bid</p>
+        <h1>RFQ Invitation</h1>
+        <p>You have been invited to participate in a new Request for Quotation (RFQ)</p>
     </div>
 
     <div class="content">
-        <p>Dear {{ $data['supplier_name'] ?? $supplier->name }},</p>
-
-        <p>You have been invited to submit a bid for the following Request for Quotation:</p>
-
-        <div class="details">
+        <p>Hello {{ $recipientName }},</p>
+        
+        <p>You have been invited to participate in the following RFQ:</p>
+        
+        <div class="rfq-details">
             <h3>{{ $rfq->title }}</h3>
+            <p><strong>Reference:</strong> {{ $rfq->reference_number }}</p>
             <p><strong>Description:</strong> {{ $rfq->description }}</p>
-            <p><strong>Deadline:</strong> {{ $data['deadline'] ?? $rfq->deadline->format('F j, Y \a\t g:i A') }}</p>
-            <p><strong>Buyer:</strong> {{ $data['buyer_name'] ?? $buyer->name }}</p>
+            <p><strong>Bid Deadline:</strong> {{ \Carbon\Carbon::parse($rfq->bid_deadline)->format('M d, Y') }}</p>
+            <p><strong>Delivery Date:</strong> {{ \Carbon\Carbon::parse($rfq->delivery_date)->format('M d, Y') }}</p>
+            @if($rfq->budget_min || $rfq->budget_max)
+                <p><strong>Budget Range:</strong> 
+                    @if($rfq->budget_min && $rfq->budget_max)
+                        ${{ number_format($rfq->budget_min) }} - ${{ number_format($rfq->budget_max) }}
+                    @elseif($rfq->budget_min)
+                        ${{ number_format($rfq->budget_min) }} minimum
+                    @elseif($rfq->budget_max)
+                        ${{ number_format($rfq->budget_max) }} maximum
+                    @endif
+                </p>
+            @endif
         </div>
 
-        <p>Please review the RFQ details and submit your bid before the deadline. You can access the full RFQ by clicking the button below:</p>
-
-        <div style="text-align: center;">
-            <a href="{{ $data['rfq_link'] ?? config('app.frontend_url') . '/rfqs/' . $rfq->id }}" class="button">
-                View RFQ Details
-            </a>
-        </div>
-
-        <p>If you have any questions about this RFQ, please contact the buyer at: <strong>{{ $data['contact_email'] ?? $buyer->email }}</strong></p>
-
-        <p>Thank you for your interest in this opportunity.</p>
-
+        <p>To view the complete RFQ details and submit your quotation, please click the button below:</p>
+        
+        <a href="{{ $rfqUrl }}" class="button">View RFQ Details</a>
+        
+        @if(!$user)
+            <p><strong>Note:</strong> You are receiving this invitation as an external contact. To participate in the bidding process, you may need to create an account or contact the RFQ creator directly.</p>
+        @endif
+        
+        <p>If you have any questions about this RFQ, please contact the RFQ creator directly.</p>
+        
         <p>Best regards,<br>
-        {{ $data['buyer_name'] ?? $buyer->name }}</p>
+        RFQ System</p>
     </div>
 
     <div class="footer">
-        <p>This is an automated message from the RFQ Management System.</p>
-        <p>If you have any technical issues, please contact support.</p>
+        <p>This is an automated message from the RFQ System. Please do not reply to this email.</p>
+        <p>If you believe you received this email in error, please contact the system administrator.</p>
     </div>
 </body>
 </html>

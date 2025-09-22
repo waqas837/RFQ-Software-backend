@@ -121,4 +121,30 @@ class PurchaseOrder extends Model
     {
         return $query->where('status', $status);
     }
+
+    /**
+     * Get formatted total amount with currency symbol.
+     */
+    public function getFormattedTotalAttribute()
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        return $currencyService->formatAmount($this->total_amount, $this->currency);
+    }
+
+    /**
+     * Convert PO amount to another currency.
+     */
+    public function convertAmountTo($targetCurrency)
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        
+        return [
+            'currency' => $targetCurrency,
+            'total_amount' => $currencyService->convert($this->total_amount, $this->currency, $targetCurrency),
+            'formatted_amount' => $currencyService->formatAmount(
+                $currencyService->convert($this->total_amount, $this->currency, $targetCurrency),
+                $targetCurrency
+            )
+        ];
+    }
 }

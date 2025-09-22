@@ -14,7 +14,6 @@ class Bid extends Model
         'rfq_id',
         'supplier_company_id',
         'submitted_by',
-        'supplier_id',
         'total_amount',
         'currency',
         'proposed_delivery_date',
@@ -73,7 +72,7 @@ class Bid extends Model
      */
     public function supplier()
     {
-        return $this->belongsTo(User::class, 'supplier_id');
+        return $this->belongsTo(User::class, 'submitted_by');
     }
 
     /**
@@ -122,5 +121,31 @@ class Bid extends Model
     public function scopeBySupplier($query, $supplierId)
     {
         return $query->where('supplier_id', $supplierId);
+    }
+
+    /**
+     * Get formatted total amount with currency symbol.
+     */
+    public function getFormattedTotalAttribute()
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        return $currencyService->formatAmount($this->total_amount, $this->currency);
+    }
+
+    /**
+     * Convert bid amount to another currency.
+     */
+    public function convertAmountTo($targetCurrency)
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        
+        return [
+            'currency' => $targetCurrency,
+            'total_amount' => $currencyService->convert($this->total_amount, $this->currency, $targetCurrency),
+            'formatted_amount' => $currencyService->formatAmount(
+                $currencyService->convert($this->total_amount, $this->currency, $targetCurrency),
+                $targetCurrency
+            )
+        ];
     }
 }

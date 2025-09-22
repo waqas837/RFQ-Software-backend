@@ -19,6 +19,9 @@ class BidController extends Controller
     {
         try {
             $bids = Bid::with(['rfq', 'supplierCompany', 'supplier', 'items.rfqItem', 'submittedBy', 'purchaseOrder'])
+                ->when($request->rfq_id, function ($query, $rfqId) {
+                    $query->where('rfq_id', $rfqId);
+                })
                 ->when($request->search, function ($query, $search) {
                     $query->whereHas('rfq', function ($q) use ($search) {
                         $q->where('title', 'like', "%{$search}%");
@@ -28,7 +31,7 @@ class BidController extends Controller
                     $query->where('status', $status);
                 })
                 ->when($request->user()->hasRole('supplier'), function ($query) use ($request) {
-                    $query->where('supplier_id', $request->user()->id);
+                    $query->where('submitted_by', $request->user()->id);
                 })
                 ->when($request->user()->hasRole('buyer'), function ($query) use ($request) {
                     $query->whereHas('rfq', function ($q) use ($request) {
@@ -80,6 +83,7 @@ class BidController extends Controller
         
         $validator = Validator::make($request->all(), [
             'rfq_id' => 'required|exists:rfqs,id',
+            'currency' => 'required|string|size:3',
             'delivery_time' => 'required|integer|min:1',
             'terms_conditions' => 'nullable|string',
             'items' => 'required|array|min:1',
@@ -160,6 +164,7 @@ class BidController extends Controller
             // Update existing draft bid
             $existingDraftBid->update([
                 'total_amount' => $totalAmount,
+                'currency' => $request->currency,
                 'delivery_time' => $request->delivery_time,
                 'terms_conditions' => $request->terms_conditions,
             ]);
@@ -173,7 +178,7 @@ class BidController extends Controller
             'submitted_by' => $user->id,
             'supplier_id' => $user->id,
             'total_amount' => $totalAmount,
-            'currency' => 'USD',
+            'currency' => $request->currency,
             'delivery_time' => $request->delivery_time,
             'terms_conditions' => $request->terms_conditions,
             'is_compliant' => true,

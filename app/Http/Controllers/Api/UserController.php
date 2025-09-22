@@ -169,4 +169,42 @@ class UserController extends Controller
             'data' => $companies
         ]);
     }
+
+    /**
+     * Get users for invitations (accessible by buyers and admins)
+     */
+    public function getUsersForInvitations(Request $request)
+    {
+        try {
+            // Check if user has permission (buyers and admins)
+            $user = $request->user();
+            if (!$user->roles->pluck('name')->intersect(['buyer', 'admin'])->count()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You do not have permission to view users for invitations'
+                ], 403);
+            }
+
+            // Get users with supplier and buyer roles (exclude current user)
+            $users = User::where('id', '!=', $user->id)
+                ->whereIn('role', ['supplier', 'buyer'])
+                ->where('status', 'active')
+                ->select('id', 'name', 'email', 'role', 'position')
+                ->orderBy('name')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $users,
+                'message' => 'Users retrieved successfully for invitations'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve users for invitations',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

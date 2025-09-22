@@ -259,4 +259,39 @@ class Rfq extends Model
     {
         return $this->isStatus('cancelled');
     }
+
+    /**
+     * Get formatted budget range with currency symbol.
+     */
+    public function getFormattedBudgetAttribute()
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        $symbol = $currencyService->getSymbol($this->currency);
+        
+        if ($this->budget_min && $this->budget_max) {
+            return $symbol . ' ' . number_format($this->budget_min, 2) . ' - ' . $symbol . ' ' . number_format($this->budget_max, 2);
+        } elseif ($this->budget_max) {
+            return 'Up to ' . $symbol . ' ' . number_format($this->budget_max, 2);
+        } elseif ($this->budget_min) {
+            return 'From ' . $symbol . ' ' . number_format($this->budget_min, 2);
+        }
+        
+        return 'Budget not specified';
+    }
+
+    /**
+     * Convert budget to another currency.
+     */
+    public function convertBudgetTo($targetCurrency)
+    {
+        $currencyService = app(\App\Services\CurrencyService::class);
+        
+        $converted = [
+            'currency' => $targetCurrency,
+            'budget_min' => $this->budget_min ? $currencyService->convert($this->budget_min, $this->currency, $targetCurrency) : null,
+            'budget_max' => $this->budget_max ? $currencyService->convert($this->budget_max, $this->currency, $targetCurrency) : null,
+        ];
+        
+        return $converted;
+    }
 }

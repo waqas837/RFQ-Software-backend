@@ -33,7 +33,7 @@ class ReportsController extends Controller
                     'total_bids' => Bid::count(),
                     'total_suppliers' => Company::where('type', 'supplier')->count(),
                     'total_buyers' => Company::where('type', 'buyer')->count(),
-                    'recent_rfqs' => Rfq::with('creator')->latest()->take(5)->get(),
+                    'recent_rfqs' => Rfq::with(['creator', 'bids'])->latest()->take(5)->get(),
                     'recent_bids' => Bid::with(['rfq', 'supplier'])->latest()->take(5)->get(),
                     'monthly_trends' => $this->getMonthlyTrends($startDate),
                     'rfq_status_distribution' => $this->getRfqStatusDistribution(),
@@ -51,7 +51,7 @@ class ReportsController extends Controller
                     })->count(),
                     'awarded_rfqs' => Rfq::where('created_by', $user->id)
                         ->where('status', 'awarded')->count(),
-                    'recent_rfqs' => Rfq::where('created_by', $user->id)->latest()->take(5)->get(),
+                    'recent_rfqs' => Rfq::where('created_by', $user->id)->with('bids')->latest()->take(5)->get(),
                     'recent_bids' => Bid::whereHas('rfq', function ($q) use ($user) {
                         $q->where('created_by', $user->id);
                     })->with(['rfq', 'supplier'])->latest()->take(5)->get(),
@@ -72,7 +72,7 @@ class ReportsController extends Controller
                     'success_rate' => $this->calculateSuccessRate($user->id),
                     'recent_rfqs' => Rfq::whereHas('suppliers', function ($q) use ($userCompany) {
                         $q->where('supplier_company_id', $userCompany->id);
-                    })->latest()->take(5)->get(),
+                    })->with('bids')->latest()->take(5)->get(),
                     'recent_bids' => Bid::where('supplier_id', $user->id)
                         ->with(['rfq'])->latest()->take(5)->get(),
                     'monthly_trends' => $this->getSupplierMonthlyTrends($startDate, $user->id),

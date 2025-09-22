@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\EmailTemplateController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\CurrencyController;
 
 /*
 |--------------------------------------------------------------------------
@@ -44,6 +45,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/profile', [AuthController::class, 'profile']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
+
+    // Get users for invitations (Buyers and Admins)
+    Route::get('/users/for-invitations', [UserController::class, 'getUsersForInvitations']);
 
     // User management (Admin only)
     Route::middleware('role:admin')->group(function () {
@@ -97,13 +101,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/item-templates/categories', [ItemTemplateController::class, 'categories']);
         Route::apiResource('item-templates', ItemTemplateController::class);
 
-    // RFQ management
+    // RFQ management - specific routes must come BEFORE apiResource
+    Route::post('/rfqs/import', [RfqController::class, 'import']);
+    Route::get('/rfqs/test-auth', [RfqController::class, 'testAuth']);
+    Route::get('/rfqs/workflow-stats', [RfqController::class, 'getWorkflowStats']);
     Route::apiResource('rfqs', RfqController::class);
     Route::post('/rfqs/{rfq}/publish', [RfqController::class, 'publish']);
     Route::post('/rfqs/{rfq}/close', [RfqController::class, 'close']);
     Route::get('/rfqs/{rfq}/workflow-transitions', [RfqController::class, 'getWorkflowTransitions']);
     Route::post('/rfqs/{rfq}/transition-status', [RfqController::class, 'transitionStatus']);
-    Route::get('/rfqs/workflow-stats', [RfqController::class, 'getWorkflowStats']);
 
     // Supplier management
     Route::apiResource('suppliers', SupplierController::class);
@@ -138,4 +144,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/notifications/{id}/mark-unread', [NotificationController::class, 'markAsUnread']);
     Route::post('/notifications/mark-all-read', [NotificationController::class, 'markAllAsRead']);
     Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
+
+    // Currency management
+    Route::get('/currencies', [CurrencyController::class, 'getSupportedCurrencies']);
+    Route::get('/currencies/conversion-data', [CurrencyController::class, 'getConversionData']);
+    Route::post('/currencies/convert', [CurrencyController::class, 'convertAmount']);
+    Route::get('/currencies/symbols', [CurrencyController::class, 'getCurrencySymbols']);
+    
+    // Currency management (Admin only)
+    Route::middleware('role:admin')->group(function () {
+        Route::get('/currencies/rates', [CurrencyController::class, 'getExchangeRates']);
+        Route::post('/currencies/rates', [CurrencyController::class, 'updateExchangeRates']);
+    });
 });
