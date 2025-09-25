@@ -115,6 +115,44 @@ class EmailService
     }
 
     /**
+     * Send RFQ cancellation notification to suppliers.
+     */
+    public static function sendRfqCancellation($rfq, $suppliers)
+    {
+        try {
+            $buyer = $rfq->creator;
+            $data = [
+                'rfq_title' => $rfq->title,
+                'rfq_description' => $rfq->description,
+                'buyer_name' => $buyer->companies->first()->name ?? $buyer->name,
+                'contact_email' => $buyer->email,
+                'cancellation_reason' => 'RFQ has been cancelled by the buyer.',
+            ];
+
+            foreach ($suppliers as $supplier) {
+                $data['supplier_name'] = $supplier->name;
+                $data['supplier_email'] = $supplier->email;
+                
+                Mail::to($supplier->email)->send(new GenericEmail(
+                    'RFQ Cancellation: ' . $rfq->title,
+                    'rfq-cancellation',
+                    $data
+                ));
+            }
+
+            Log::info('RFQ cancellation emails sent successfully', [
+                'rfq_id' => $rfq->id,
+                'suppliers_count' => $suppliers->count()
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Failed to send RFQ cancellation emails: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Send RFQ invitation to suppliers.
      */
     public static function sendRfqInvitation($rfq, $suppliers, $buyer)

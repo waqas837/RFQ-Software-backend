@@ -53,6 +53,7 @@ class RfqInvitationMail extends Mailable
                 'recipientName' => $this->user ? $this->user->name : 'Valued Partner',
                 'loginUrl' => config('app.frontend_url') . '/login',
                 'rfqUrl' => config('app.frontend_url') . '/rfqs/' . $this->rfq->id,
+                'formattedBudget' => $this->rfq->formatted_budget,
             ]
         );
     }

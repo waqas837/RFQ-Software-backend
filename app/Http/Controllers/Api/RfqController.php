@@ -88,6 +88,7 @@ class RfqController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
+            'specifications' => 'nullable|string',
             'category_id' => 'required|exists:categories,id',
             'currency' => 'required|string|size:3',
             'budget_min' => 'nullable|numeric|min:0',
@@ -143,12 +144,28 @@ class RfqController extends Controller
         $referenceNumber = 'RFQ-' . $year . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
 
         // Handle file uploads
-        $attachmentPaths = [];
+        $attachmentData = [];
+        
+        // Handle new file uploads
         if ($request->hasFile('attachments')) {
             foreach ($request->file('attachments') as $file) {
                 $filename = time() . '_' . $file->getClientOriginalName();
                 $path = $file->storeAs('rfq-attachments', $filename, 'public');
-                $attachmentPaths[] = $path;
+                $attachmentData[] = [
+                    'name' => $file->getClientOriginalName(),
+                    'path' => $path,
+                    'size' => $file->getSize(),
+                    'type' => $file->getMimeType(),
+                    'url' => asset('storage/' . $path)
+                ];
+            }
+        }
+        
+        // Handle existing attachments (from edit mode)
+        if ($request->has('existing_attachments')) {
+            $existingAttachments = json_decode($request->existing_attachments, true);
+            if (is_array($existingAttachments)) {
+                $attachmentData = array_merge($attachmentData, $existingAttachments);
             }
         }
 
@@ -156,6 +173,7 @@ class RfqController extends Controller
             'title' => $request->title,
             'reference_number' => $referenceNumber,
             'description' => $request->description,
+            'specifications' => $request->specifications,
             'category_id' => $category->id,
             'company_id' => $request->user()->companies->first()->id,
             'created_by' => $request->user()->id,
@@ -166,7 +184,7 @@ class RfqController extends Controller
             'delivery_date' => $request->delivery_deadline,
             'bid_deadline' => $request->bidding_deadline,
             'terms_conditions' => $request->terms_conditions,
-            'attachments' => $attachmentPaths,
+            'attachments' => $attachmentData,
         ]);
 
         // Add items to RFQ
@@ -357,11 +375,14 @@ class RfqController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'sometimes|string|max:255',
             'description' => 'nullable|string',
+            'category_id' => 'sometimes|exists:categories,id',
+            'currency' => 'sometimes|string|size:3',
             'budget_min' => 'nullable|numeric|min:0',
             'budget_max' => 'nullable|numeric|min:0|gte:budget_min',
-            'delivery_deadline' => 'sometimes|date|after:today',
-            'bidding_deadline' => 'sometimes|date|before:delivery_deadline',
+            'delivery_deadline' => 'sometimes|date',
+            'bidding_deadline' => 'sometimes|date',
             'terms_conditions' => 'nullable|string',
+            'specifications' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -373,7 +394,7 @@ class RfqController extends Controller
         }
 
         $updateData = $request->only([
-            'title', 'description', 'budget_min', 'budget_max', 'terms_conditions'
+            'title', 'description', 'category_id', 'currency', 'budget_min', 'budget_max', 'terms_conditions', 'specifications'
         ]);
         
         // Map frontend field names to database field names
@@ -408,13 +429,80 @@ class RfqController extends Controller
             ], 403);
         }
 
-        // Allow deletion of RFQs in any status for testing
+        // Check if RFQ has bids
+        $bidCount = $rfq->bids()->count();
+        if ($bidCount > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "Cannot delete RFQ. It has {$bidCount} submitted bid(s). Please cancel the RFQ instead of deleting it."
+            ], 400);
+        }
+
+        // Check if RFQ has purchase orders
+        $poCount = $rfq->purchaseOrders()->count();
+        if ($poCount > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "Cannot delete RFQ. It has {$poCount} purchase order(s). Please cancel the RFQ instead of deleting it."
+            ], 400);
+        }
+
+        // Only allow deletion of RFQs in draft status with no bids or POs
+        if ($rfq->status !== 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete RFQ. Only draft RFQs without bids or purchase orders can be deleted.'
+            ], 400);
+        }
 
         $rfq->delete();
 
         return response()->json([
             'success' => true,
             'message' => 'RFQ deleted successfully'
+        ]);
+    }
+
+    /**
+     * Cancel an RFQ (soft delete - keeps data for audit trail).
+     */
+    public function cancel(Request $request, $id)
+    {
+        $rfq = Rfq::findOrFail($id);
+
+        // Check if user has permission to cancel RFQs (buyers and admins)
+        if (!$request->user()->roles->pluck('name')->intersect(['buyer', 'admin'])->count()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You do not have permission to cancel RFQs'
+            ], 403);
+        }
+
+        // Check if RFQ is already completed or cancelled
+        if (in_array($rfq->status, ['completed', 'cancelled'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'RFQ is already completed or cancelled'
+            ], 400);
+        }
+
+        // Update status to cancelled (soft delete approach)
+        $rfq->update(['status' => 'cancelled']);
+
+        // Notify suppliers about cancellation
+        try {
+            $suppliers = $rfq->suppliers;
+            if ($suppliers->count() > 0) {
+                // Send cancellation notifications
+                EmailService::sendRfqCancellation($rfq, $suppliers);
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending RFQ cancellation emails: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'RFQ cancelled successfully. All bids and purchase orders are preserved for audit trail.'
         ]);
     }
 
@@ -680,6 +768,48 @@ class RfqController extends Controller
                 'rfq_id' => $rfq->id,
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    /**
+     * Download RFQ template file.
+     */
+    public function downloadTemplate($type)
+    {
+        try {
+            $allowedTypes = ['xlsx', 'csv'];
+            
+            if (!in_array($type, $allowedTypes)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid template type. Allowed types: ' . implode(', ', $allowedTypes)
+                ], 400);
+            }
+
+            $filename = "rfq_template.{$type}";
+            $filePath = storage_path("app/public/{$filename}");
+
+            if (!file_exists($filePath)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Template file not found'
+                ], 404);
+            }
+
+            return response()->download($filePath, $filename, [
+                'Content-Type' => $type === 'xlsx' 
+                    ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    : 'text/csv',
+                'Content-Disposition' => "attachment; filename=\"{$filename}\""
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("Error downloading template: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to download template',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }

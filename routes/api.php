@@ -38,6 +38,9 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::post('/check-status', [AuthController::class, 'checkStatus']);
 
+// Public template downloads
+Route::get('/rfqs/template/{type}', [RfqController::class, 'downloadTemplate']);
+
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
     // Auth routes
@@ -108,6 +111,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('rfqs', RfqController::class);
     Route::post('/rfqs/{rfq}/publish', [RfqController::class, 'publish']);
     Route::post('/rfqs/{rfq}/close', [RfqController::class, 'close']);
+    Route::post('/rfqs/{rfq}/cancel', [RfqController::class, 'cancel']);
     Route::get('/rfqs/{rfq}/workflow-transitions', [RfqController::class, 'getWorkflowTransitions']);
     Route::post('/rfqs/{rfq}/transition-status', [RfqController::class, 'transitionStatus']);
 

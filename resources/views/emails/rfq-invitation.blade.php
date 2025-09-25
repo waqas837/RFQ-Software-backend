@@ -79,15 +79,7 @@
             <p><strong>Bid Deadline:</strong> {{ \Carbon\Carbon::parse($rfq->bid_deadline)->format('M d, Y') }}</p>
             <p><strong>Delivery Date:</strong> {{ \Carbon\Carbon::parse($rfq->delivery_date)->format('M d, Y') }}</p>
             @if($rfq->budget_min || $rfq->budget_max)
-                <p><strong>Budget Range:</strong> 
-                    @if($rfq->budget_min && $rfq->budget_max)
-                        ${{ number_format($rfq->budget_min) }} - ${{ number_format($rfq->budget_max) }}
-                    @elseif($rfq->budget_min)
-                        ${{ number_format($rfq->budget_min) }} minimum
-                    @elseif($rfq->budget_max)
-                        ${{ number_format($rfq->budget_max) }} maximum
-                    @endif
-                </p>
+                <p><strong>Budget Range:</strong> {{ $rfq->formatted_budget }}</p>
             @endif
         </div>
 
