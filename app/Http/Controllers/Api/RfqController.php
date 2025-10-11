@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Rfq;
 use App\Models\Item;
 use App\Models\Company;
+use App\Models\SupplierInvitation;
 use App\Services\EmailService;
 use App\Services\WorkflowService;
 use Illuminate\Http\Request;
@@ -61,7 +62,15 @@ class RfqController extends Controller
      */
     public function show($id)
     {
-        $rfq = Rfq::with(['company', 'creator', 'items.item', 'suppliers', 'bids'])->findOrFail($id);
+        $rfq = Rfq::with(['company', 'creator', 'category', 'items.item', 'suppliers', 'bids'])->findOrFail($id);
+
+        // Transform items to include custom fields from the item relationship
+        $rfq->items->each(function ($rfqItem) {
+            if ($rfqItem->item) {
+                $rfqItem->item->load('customFields');
+                $rfqItem->item_custom_fields = $rfqItem->item->getCustomFieldsArray();
+            }
+        });
 
         // Add workflow information
         $rfq->available_transitions = $rfq->getAvailableTransitions(request()->user());
@@ -177,7 +186,7 @@ class RfqController extends Controller
             'category_id' => $category->id,
             'company_id' => $request->user()->companies->first()->id,
             'created_by' => $request->user()->id,
-            'status' => 'draft',
+            'status' => 'bidding_open',
             'currency' => $request->currency,
             'budget_min' => $request->budget_min,
             'budget_max' => $request->budget_max,
@@ -193,7 +202,7 @@ class RfqController extends Controller
             $itemRecord = \App\Models\Item::find($item['item_id']);
             $itemName = $itemRecord ? $itemRecord->name : 'Unknown Item';
             $itemDescription = $itemRecord ? $itemRecord->description : null;
-            $unitOfMeasure = $itemRecord ? $itemRecord->unit_of_measure : 'pcs';
+            $unitOfMeasure = $itemRecord ? ($itemRecord->unit_of_measure ?: 'pcs') : 'pcs';
             
             $rfq->items()->create([
                 'item_id' => $item['item_id'],
@@ -202,7 +211,7 @@ class RfqController extends Controller
                 'quantity' => $item['quantity'],
                 'unit_of_measure' => $unitOfMeasure,
                 'specifications' => $item['specifications'] ?? null,
-                'custom_fields' => null,
+                'custom_fields' => is_array($item['custom_fields']) ? $item['custom_fields'] : null,
                 'estimated_price' => null,
                 'currency' => 'USD',
                 'delivery_date' => null,
@@ -216,7 +225,7 @@ class RfqController extends Controller
         }
 
         // Send notifications to invited people
-        $this->sendInvitationNotifications($rfq, $request->invited_user_ids ?? [], $request->invited_emails ?? []);
+        $this->sendInvitationNotifications($rfq, $request->invited_user_ids ?? [], $request->invited_emails ?? [], $request->user()->id);
 
         return response()->json([
             'success' => true,
@@ -715,7 +724,7 @@ class RfqController extends Controller
     /**
      * Send invitation notifications to users and external emails
      */
-    private function sendInvitationNotifications($rfq, $invitedUserIds, $invitedEmails)
+    private function sendInvitationNotifications($rfq, $invitedUserIds, $invitedEmails, $invitedBy)
     {
         try {
             // Send notifications to existing users
@@ -749,9 +758,16 @@ class RfqController extends Controller
             // Send email notifications to external emails
             if (!empty($invitedEmails)) {
                 foreach ($invitedEmails as $email) {
-                    // Send email notification (if email is configured)
+                    // Create supplier invitation token for external emails
+                    $invitation = SupplierInvitation::createInvitation(
+                        $email,
+                        $rfq->id,
+                        $invitedBy
+                    );
+
+                    // Send email notification with registration link
                     if (config('mail.default') !== 'log') {
-                        Mail::to($email)->send(new \App\Mail\RfqInvitationMail($rfq, null, $email));
+                        Mail::to($email)->send(new \App\Mail\RfqInvitationMail($rfq, null, $email, $invitation));
                     }
                 }
             }
@@ -787,7 +803,7 @@ class RfqController extends Controller
             }
 
             $filename = "rfq_template.{$type}";
-            $filePath = storage_path("app/public/{$filename}");
+            $filePath = base_path("Filestoupload/rfqtempelates/{$filename}");
 
             if (!file_exists($filePath)) {
                 return response()->json([

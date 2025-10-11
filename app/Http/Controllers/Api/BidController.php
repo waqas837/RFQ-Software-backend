@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Bid;
 use App\Models\Rfq;
+use App\Models\PurchaseOrder;
 use App\Services\EmailService;
+use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
@@ -79,7 +81,7 @@ class BidController extends Controller
     public function store(Request $request)
     {
         // Debug: Log the request data
-        \Log::info('Bid submission request:', $request->all());
+        Log::info('Bid submission request:', $request->all());
         
         $validator = Validator::make($request->all(), [
             'rfq_id' => 'required|exists:rfqs,id',
@@ -97,12 +99,12 @@ class BidController extends Controller
 
         if ($validator->fails()) {
             // Debug: Log validation errors
-            \Log::info('Validation failed:', $validator->errors()->toArray());
+            Log::info('Validation failed:', $validator->errors()->toArray());
             
             // Debug: Check if RFQ items exist
             foreach ($request->items as $item) {
                 $rfqItem = \App\Models\RfqItem::find($item['item_id']);
-                \Log::info("RFQ Item {$item['item_id']} exists:", $rfqItem ? 'YES' : 'NO');
+                Log::info("RFQ Item {$item['item_id']} exists:", $rfqItem ? 'YES' : 'NO');
             }
             
             return response()->json([
@@ -112,13 +114,23 @@ class BidController extends Controller
             ], 422);
         }
 
-        // Check if RFQ is open for bidding
+        // Check if RFQ is still accepting bids
         $rfq = Rfq::findOrFail($request->rfq_id);
-        if (!in_array($rfq->status, ['published', 'bidding_open'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'RFQ is not open for bidding'
-            ], 400);
+        
+        if (!$rfq->isAcceptingBids()) {
+            if ($rfq->isBiddingExpired()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Bidding deadline has passed. No more bids can be submitted for this RFQ.',
+                    'deadline' => $rfq->bid_deadline->format('Y-m-d H:i:s')
+                ], 400);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This RFQ is not currently accepting bids. Current status: ' . $rfq->status,
+                    'current_status' => $rfq->status
+                ], 400);
+            }
         }
 
         // Check if supplier can bid on this RFQ
@@ -195,12 +207,18 @@ class BidController extends Controller
             $rfqItem = \App\Models\RfqItem::find($item['item_id']);
             $originalItem = \App\Models\Item::find($rfqItem->item_id);
             
+            // Safety check for null items
+            if (!$rfqItem || !$originalItem) {
+                Log::error("Missing RFQ item or original item for item_id: {$item['item_id']}");
+                continue;
+            }
+            
             $bid->items()->create([
                 'rfq_item_id' => $item['item_id'],
-                'item_name' => $originalItem->name,
-                'item_description' => $originalItem->description,
+                'item_name' => $originalItem->name ?? 'Unknown Item',
+                'item_description' => $originalItem->description ?? '',
                 'quantity' => $item['quantity'],
-                'unit_of_measure' => $originalItem->unit_of_measure,
+                'unit_of_measure' => $originalItem->unit_of_measure ?? 'pcs',
                 'unit_price' => $item['unit_price'],
                 'total_price' => $item['total_price'],
                 'currency' => 'USD',
@@ -261,12 +279,18 @@ class BidController extends Controller
                 $rfqItem = \App\Models\RfqItem::find($item['item_id']);
                 $originalItem = \App\Models\Item::find($rfqItem->item_id);
                 
+                // Safety check for null items
+                if (!$rfqItem || !$originalItem) {
+                    Log::error("Missing RFQ item or original item for item_id: {$item['item_id']}");
+                    continue;
+                }
+                
                 $bid->items()->create([
                     'rfq_item_id' => $item['item_id'],
-                    'item_name' => $originalItem->name,
-                    'item_description' => $originalItem->description,
+                    'item_name' => $originalItem->name ?? 'Unknown Item',
+                    'item_description' => $originalItem->description ?? '',
                     'quantity' => $item['quantity'],
-                    'unit_of_measure' => $originalItem->unit_of_measure,
+                    'unit_of_measure' => $originalItem->unit_of_measure ?? 'pcs',
                     'unit_price' => $item['unit_price'],
                     'total_price' => $item['total_price'],
                     'currency' => 'USD',
@@ -328,6 +352,13 @@ class BidController extends Controller
             'submitted_at' => now()
         ]);
 
+        // Debug: Log bid submission
+        Log::info('Bid submitted successfully', [
+            'bid_id' => $bid->id,
+            'new_status' => $bid->status,
+            'submitted_at' => $bid->submitted_at
+        ]);
+
         // Create notification for buyer
         try {
             $rfq = $bid->rfq;
@@ -347,7 +378,9 @@ class BidController extends Controller
                 $buyer->id,
                 $bid->supplier->id,
                 $bid->id,
-                'bid'
+                'bid',
+                null,
+                true
             );
             
             Log::info('Bid notification created successfully');
@@ -420,10 +453,25 @@ class BidController extends Controller
     {
         $bid = Bid::findOrFail($id);
 
-        if ($bid->status !== 'submitted') {
+        // Debug: Log bid status
+        Log::info('Attempting to award bid', [
+            'bid_id' => $bid->id,
+            'current_status' => $bid->status,
+            'submitted_at' => $bid->submitted_at
+        ]);
+
+        if ($bid->status === 'awarded') {
+            return response()->json([
+                'success' => true,
+                'message' => 'Bid was already awarded',
+                'data' => $bid->load(['rfq', 'supplierCompany', 'supplier', 'items.rfqItem'])
+            ]);
+        }
+
+        if (!in_array($bid->status, ['submitted', 'under_evaluation'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only submitted bids can be awarded'
+                'message' => 'Only submitted or under evaluation bids can be awarded. Current status: ' . $bid->status
             ], 400);
         }
 
@@ -455,21 +503,21 @@ class BidController extends Controller
         }
 
         if ($request->has('technical_score')) {
-            $updateData['technical_score'] = $request->technical_score;
+            $updateData['technical_score'] = round($request->technical_score, 2);
         }
 
         if ($request->has('commercial_score')) {
-            $updateData['commercial_score'] = $request->commercial_score;
+            $updateData['commercial_score'] = round($request->commercial_score, 2);
         }
 
         if ($request->has('delivery_score')) {
-            $updateData['delivery_score'] = $request->delivery_score;
+            $updateData['delivery_score'] = round($request->delivery_score, 2);
         }
 
         if ($request->has('total_score')) {
-            $updateData['total_score'] = $request->total_score;
+            $updateData['total_score'] = round($request->total_score, 2);
         } elseif ($request->has('technical_score') && $request->has('commercial_score') && $request->has('delivery_score')) {
-            $updateData['total_score'] = ($request->technical_score + $request->commercial_score + $request->delivery_score) / 3;
+            $updateData['total_score'] = round(($request->technical_score + $request->commercial_score + $request->delivery_score) / 3, 2);
         }
 
         $bid->update($updateData);
@@ -477,10 +525,140 @@ class BidController extends Controller
         // Update RFQ status
         $bid->rfq->update(['status' => 'awarded']);
 
+        // Auto-generate Purchase Order
+        try {
+            $this->autoGeneratePurchaseOrder($bid, $request->user());
+        } catch (\Exception $e) {
+            Log::error('Auto-PO generation failed: ' . $e->getMessage());
+            // Don't fail the award process if PO generation fails
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Bid awarded successfully',
             'data' => $bid->load(['rfq', 'supplierCompany', 'supplier', 'items.rfqItem'])
         ]);
+    }
+
+    /**
+     * Auto-generate Purchase Order from awarded bid.
+     */
+    private function autoGeneratePurchaseOrder($bid, $user)
+    {
+        // Check if PO already exists for this bid
+        if (PurchaseOrder::where('bid_id', $bid->id)->exists()) {
+            Log::info("PO already exists for bid {$bid->id}");
+            return;
+        }
+
+        // Generate PO number
+        $poNumber = 'PO-' . date('Y') . '-' . str_pad(PurchaseOrder::count() + 1, 4, '0', STR_PAD_LEFT);
+
+        // Get default delivery address from user's company
+        $buyerCompany = $user->companies->first();
+        $defaultDeliveryAddress = $buyerCompany ? 
+            ($buyerCompany->address ?? 'Default delivery address') : 
+            'Default delivery address';
+
+        // Get default payment terms from RFQ or use default
+        $defaultPaymentTerms = $bid->rfq->terms_conditions ? 
+            'As per RFQ terms' : 
+            'Net 30 days';
+
+        $purchaseOrder = PurchaseOrder::create([
+            'po_number' => $poNumber,
+            'rfq_id' => $bid->rfq_id,
+            'bid_id' => $bid->id,
+            'supplier_company_id' => $bid->supplier_company_id,
+            'buyer_company_id' => $bid->rfq->company_id,
+            'created_by' => $user->id,
+            'total_amount' => $bid->total_amount,
+            'currency' => $bid->rfq->currency ?? 'USD',
+            'order_date' => now()->toDateString(),
+            'expected_delivery_date' => $bid->rfq->delivery_date,
+            'delivery_address' => $defaultDeliveryAddress,
+            'payment_terms' => $defaultPaymentTerms,
+            'notes' => 'Auto-generated from awarded bid',
+            'status' => 'sent_to_supplier',
+            'sent_at' => now(),
+        ]);
+
+        // Debug: Log PO creation details
+        Log::info('Auto-PO created successfully', [
+            'po_id' => $purchaseOrder->id,
+            'po_number' => $purchaseOrder->po_number,
+            'supplier_company_id' => $purchaseOrder->supplier_company_id,
+            'buyer_company_id' => $purchaseOrder->buyer_company_id,
+            'status' => $purchaseOrder->status
+        ]);
+
+        // Copy items from bid to PO
+        foreach ($bid->items as $bidItem) {
+            $purchaseOrder->items()->create([
+                'rfq_item_id' => $bidItem->rfq_item_id,
+                'item_name' => $bidItem->item_name,
+                'item_description' => $bidItem->item_description,
+                'quantity' => $bidItem->quantity,
+                'unit_price' => $bidItem->unit_price,
+                'total_price' => $bidItem->total_price,
+                'unit_of_measure' => $bidItem->unit_of_measure,
+                'specifications' => $bidItem->technical_specifications,
+                'notes' => $bidItem->notes,
+            ]);
+        }
+
+        // Send email notification to supplier
+        try {
+            $this->sendPOEmailNotification($purchaseOrder, 'sent_to_supplier', 'supplier');
+        } catch (\Exception $e) {
+            Log::error('Error sending PO email notification: ' . $e->getMessage());
+        }
+
+        // Create notification for supplier
+        try {
+            $supplierUser = $purchaseOrder->supplierCompany->users->first();
+            Log::info('PO Notification - Supplier details:', [
+                'supplier_company_id' => $purchaseOrder->supplier_company_id,
+                'supplier_user_id' => $supplierUser ? $supplierUser->id : 'none',
+                'supplier_user_email' => $supplierUser ? $supplierUser->email : 'none'
+            ]);
+            
+            if ($supplierUser) {
+                $notificationService = new NotificationService();
+                $notificationService->createNotification(
+                    'po_created',
+                    'New Purchase Order',
+                    "A new Purchase Order #{$purchaseOrder->po_number} has been created for your awarded bid.",
+                    $supplierUser->id,
+                    $user->id,
+                    $purchaseOrder->id,
+                    'purchase_order',
+                    null,
+                    true
+                );
+                Log::info('PO notification created for supplier user: ' . $supplierUser->id);
+            } else {
+                Log::warning('No supplier user found for company: ' . $purchaseOrder->supplier_company_id);
+            }
+        } catch (\Exception $e) {
+            Log::error('Error creating PO notification: ' . $e->getMessage());
+        }
+
+        Log::info("Auto-generated PO {$poNumber} for bid {$bid->id}");
+    }
+
+    /**
+     * Send PO email notification.
+     */
+    private function sendPOEmailNotification($purchaseOrder, $status, $recipientType)
+    {
+        try {
+            $supplierUser = $purchaseOrder->supplierCompany->users->first();
+            if ($supplierUser) {
+                EmailService::sendPurchaseOrderNotification($purchaseOrder, $supplierUser, $purchaseOrder->rfq, $purchaseOrder->buyerCompany->users->first());
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending PO email: ' . $e->getMessage());
+        }
     }
 }

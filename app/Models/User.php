@@ -35,6 +35,7 @@ class User extends Authenticatable
         'permissions',
         'last_login_at',
         'last_login_ip',
+        'is_active',
     ];
 
     /**
@@ -59,6 +60,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'permissions' => 'array',
             'last_login_at' => 'datetime',
+            'is_active' => 'boolean',
         ];
     }
 

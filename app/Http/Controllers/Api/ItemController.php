@@ -11,6 +11,7 @@ use App\Enums\FieldType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 
 class ItemController extends Controller
 {
@@ -43,6 +44,15 @@ class ItemController extends Controller
                 })
                 ->paginate($request->per_page ?? 15);
 
+            // Transform items to include custom fields
+            $transformedItems = $items->getCollection()->map(function ($item) {
+                $itemData = $item->toArray();
+                $itemData['custom_fields'] = $item->getCustomFieldsArray();
+                return $itemData;
+            });
+
+            $items->setCollection($transformedItems);
+
             return response()->json([
                 'success' => true,
                 'data' => $items,
@@ -63,10 +73,14 @@ class ItemController extends Controller
     public function show($id)
     {
         $item = Item::with(['category', 'creator', 'template', 'customFields'])->findOrFail($id);
+        
+        // Transform item to include custom fields
+        $itemData = $item->toArray();
+        $itemData['custom_fields'] = $item->getCustomFieldsArray();
 
         return response()->json([
             'success' => true,
-            'data' => $item
+            'data' => $itemData
         ]);
     }
 
@@ -262,16 +276,80 @@ class ItemController extends Controller
         try {
             $file = $request->file('file');
             $templateId = $request->template_id;
+            $importedCount = 0;
+            $failedCount = 0;
+            $errors = [];
+
+            // Read the file using PhpSpreadsheet
+            $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($file->getPathname());
+            $spreadsheet = $reader->load($file->getPathname());
+            $worksheet = $spreadsheet->getActiveSheet();
+            $rows = $worksheet->toArray();
+
+            // Skip header row
+            $headerRow = array_shift($rows);
             
-            // This would integrate with Laravel Excel package
-            // For now, return a placeholder response
+            // Expected columns: name, description, sku, category_id, unit_of_measure, specifications, is_active
+            $expectedColumns = ['name', 'description', 'sku', 'category_id', 'unit_of_measure', 'specifications', 'is_active'];
+            
+            foreach ($rows as $rowIndex => $row) {
+                try {
+                    // Skip empty rows
+                    if (empty(array_filter($row))) {
+                        continue;
+                    }
+
+                    $user = Auth::user();
+                    /** @var \App\Models\User $user */
+                    $userCompany = $user->companies()->first();
+                    
+                    if (!$userCompany) {
+                        throw new \Exception('User must be associated with a company');
+                    }
+
+                    $itemData = [
+                        'name' => $row[0] ?? '',
+                        'description' => $row[1] ?? '',
+                        'sku' => $row[2] ?? '',
+                        'category_id' => $row[3] ?? null,
+                        'unit_of_measure' => $row[4] ?? 'pcs',
+                        'specifications' => $row[5] ? json_decode($row[5], true) : [],
+                        'is_active' => filter_var($row[6] ?? true, FILTER_VALIDATE_BOOLEAN),
+                        'template_id' => $templateId,
+                        'created_by' => $user->id,
+                        'company_id' => $userCompany->id,
+                    ];
+
+                    // Validate required fields
+                    if (empty($itemData['name'])) {
+                        throw new \Exception('Name is required');
+                    }
+
+                    // Check if SKU already exists
+                    if (!empty($itemData['sku'])) {
+                        $existingItem = Item::where('sku', $itemData['sku'])->first();
+                        if ($existingItem) {
+                            throw new \Exception('SKU already exists: ' . $itemData['sku']);
+                        }
+                    }
+
+                    // Create the item
+                    Item::create($itemData);
+                    $importedCount++;
+
+                } catch (\Exception $e) {
+                    $failedCount++;
+                    $errors[] = "Row " . ($rowIndex + 2) . ": " . $e->getMessage();
+                }
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Bulk import functionality will be implemented with Laravel Excel package',
+                'message' => "Import completed. {$importedCount} items imported, {$failedCount} failed.",
                 'data' => [
-                    'imported_count' => 0,
-                    'failed_count' => 0,
-                    'errors' => []
+                    'imported_count' => $importedCount,
+                    'failed_count' => $failedCount,
+                    'errors' => $errors
                 ]
             ]);
 
@@ -302,14 +380,68 @@ class ItemController extends Controller
                 })
                 ->get();
 
-            // This would integrate with Laravel Excel package
-            // For now, return a placeholder response
+            // Create a new spreadsheet
+            $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+            $worksheet = $spreadsheet->getActiveSheet();
+            
+            // Set headers
+            $headers = [
+                'Name', 'Description', 'SKU', 'Category ID', 'Unit of Measure', 
+                'Specifications', 'Is Active', 'Created At', 'Updated At'
+            ];
+            
+            $col = 1;
+            foreach ($headers as $header) {
+                $worksheet->setCellValue([$col, 1], $header);
+                $col++;
+            }
+            
+            // Style the header row
+            $worksheet->getStyle('A1:I1')->getFont()->setBold(true);
+            $worksheet->getStyle('A1:I1')->getFill()
+                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                ->getStartColor()->setRGB('E5E7EB');
+            
+            // Add data rows
+            $row = 2;
+            foreach ($items as $item) {
+                $worksheet->setCellValue([1, $row], $item->name);
+                $worksheet->setCellValue([2, $row], $item->description);
+                $worksheet->setCellValue([3, $row], $item->sku);
+                $worksheet->setCellValue([4, $row], $item->category_id);
+                $worksheet->setCellValue([5, $row], $item->unit_of_measure);
+                $worksheet->setCellValue([6, $row], json_encode($item->specifications));
+                $worksheet->setCellValue([7, $row], $item->is_active ? 'Yes' : 'No');
+                $worksheet->setCellValue([8, $row], $item->created_at->format('Y-m-d H:i:s'));
+                $worksheet->setCellValue([9, $row], $item->updated_at->format('Y-m-d H:i:s'));
+                $row++;
+            }
+            
+            // Auto-size columns
+            foreach (range('A', 'I') as $column) {
+                $worksheet->getColumnDimension($column)->setAutoSize(true);
+            }
+            
+            // Generate filename
+            $filename = 'items_export_' . date('Y-m-d_H-i-s') . '.xlsx';
+            $filepath = storage_path('app/exports/' . $filename);
+            
+            // Ensure directory exists
+            if (!file_exists(dirname($filepath))) {
+                mkdir(dirname($filepath), 0755, true);
+            }
+            
+            // Save the file
+            $writer = \PhpOffice\PhpSpreadsheet\IOFactory::createWriter($spreadsheet, 'Xlsx');
+            $writer->save($filepath);
+            
             return response()->json([
                 'success' => true,
-                'message' => 'Bulk export functionality will be implemented with Laravel Excel package',
+                'message' => 'Items exported successfully',
                 'data' => [
                     'exported_count' => $items->count(),
-                    'download_url' => null
+                    'download_url' => url('api/downloads/' . $filename),
+                    'filename' => $filename
                 ]
             ]);
 

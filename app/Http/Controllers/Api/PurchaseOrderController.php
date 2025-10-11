@@ -10,6 +10,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use App\Mail\PurchaseOrderNotification;
 use App\Services\NotificationService;
 
@@ -28,9 +29,9 @@ class PurchaseOrderController extends Controller
     {
         try {
             // Debug logging
-            \Log::info('PO Controller - User ID: ' . $request->user()->id);
-            \Log::info('PO Controller - User Role: ' . $request->user()->role);
-            \Log::info('PO Controller - User Company ID: ' . $request->user()->company_id);
+            Log::info('PO Controller - User ID: ' . $request->user()->id);
+            Log::info('PO Controller - User Role: ' . $request->user()->role);
+            Log::info('PO Controller - User Company ID: ' . $request->user()->company_id);
             
             $purchaseOrders = PurchaseOrder::with(['rfq', 'supplierCompany', 'buyerCompany', 'creator'])
                 ->when($request->search, function ($query, $search) {
@@ -43,19 +44,35 @@ class PurchaseOrderController extends Controller
                     $query->where('status', $status);
                 })
                 ->when($request->user()->role === 'supplier', function ($query) use ($request) {
-                    if ($request->user()->company_id) {
-                        $query->where('supplier_company_id', $request->user()->company_id);
+                    $user = $request->user();
+                    $supplierCompany = $user->companies->first();
+                    Log::info('PO Controller - Supplier user details:', [
+                        'user_id' => $user->id,
+                        'user_role' => $user->role,
+                        'companies_count' => $user->companies->count(),
+                        'company_id' => $supplierCompany ? $supplierCompany->id : 'none'
+                    ]);
+                    if ($supplierCompany) {
+                        $query->where('supplier_company_id', $supplierCompany->id);
+                        Log::info('PO Controller - Supplier filtering by company_id: ' . $supplierCompany->id);
+                    } else {
+                        Log::warning('PO Controller - Supplier has no company association');
+                        // If no company, show POs where user is the supplier
+                        $query->whereHas('rfq.bids', function($q) use ($user) {
+                            $q->where('supplier_id', $user->id);
+                        });
                     }
                 })
                 ->when($request->user()->role === 'buyer', function ($query) use ($request) {
-                    \Log::info('PO Controller - Buyer role detected, applying filter');
-                    if ($request->user()->company_id) {
-                        \Log::info('PO Controller - Filtering by company_id: ' . $request->user()->company_id);
-                        $query->where('buyer_company_id', $request->user()->company_id);
+                    $user = $request->user();
+                    $buyerCompany = $user->companies->first();
+                    if ($buyerCompany) {
+                        $query->where('buyer_company_id', $buyerCompany->id);
+                        Log::info('PO Controller - Buyer filtering by company_id: ' . $buyerCompany->id);
                     } else {
-                        \Log::info('PO Controller - No company_id, filtering by created_by: ' . $request->user()->id);
+                        Log::info('PO Controller - No company_id, filtering by created_by: ' . $user->id);
                         // If no company_id, show POs created by this user
-                        $query->where('created_by', $request->user()->id);
+                        $query->where('created_by', $user->id);
                     }
                 })
                 ->when($request->sort_by, function ($query) use ($request) {
@@ -66,8 +83,8 @@ class PurchaseOrderController extends Controller
                 });
                 
             // Debug: Log the SQL query
-            \Log::info('PO Controller - SQL Query: ' . $purchaseOrders->toSql());
-            \Log::info('PO Controller - Query Bindings: ' . json_encode($purchaseOrders->getBindings()));
+            Log::info('PO Controller - SQL Query: ' . $purchaseOrders->toSql());
+            Log::info('PO Controller - Query Bindings: ' . json_encode($purchaseOrders->getBindings()));
             
             $purchaseOrders = $purchaseOrders->paginate($request->per_page ?? 15);
 
@@ -119,6 +136,8 @@ class PurchaseOrderController extends Controller
                 'delivery_address' => 'required|string|max:500',
                 'payment_terms' => 'required|string|max:255',
                 'notes' => 'nullable|string',
+                'requires_approval' => 'boolean',
+                'approval_level' => 'in:single,multi',
             ]);
 
             if ($validator->fails()) {
@@ -140,11 +159,13 @@ class PurchaseOrderController extends Controller
             }
 
             // Check if PO already exists for this bid
-            if (PurchaseOrder::where('bid_id', $request->bid_id)->exists()) {
+            $existingPO = PurchaseOrder::where('bid_id', $request->bid_id)->first();
+            if ($existingPO) {
                 return response()->json([
-                    'success' => false,
-                    'message' => 'Purchase order already exists for this bid'
-                ], 400);
+                    'success' => true,
+                    'message' => 'Purchase order already exists for this bid',
+                    'data' => $existingPO->load(['rfq', 'supplierCompany', 'buyerCompany', 'creator', 'items'])
+                ], 200);
             }
 
             // Generate PO number
@@ -158,9 +179,9 @@ class PurchaseOrderController extends Controller
                 'buyer_company_id' => $bid->rfq->company_id,
                 'created_by' => $request->user()->id,
                 'total_amount' => $bid->total_amount,
-                'currency' => 'USD',
+                'currency' => $bid->rfq->currency ?? 'USD',
                 'order_date' => now()->toDateString(),
-                'expected_delivery_date' => $bid->rfq->delivery_deadline,
+                'expected_delivery_date' => $bid->rfq->delivery_date,
                 'delivery_address' => $request->delivery_address,
                 'payment_terms' => $request->payment_terms,
                 'notes' => $request->notes,
@@ -195,7 +216,7 @@ class PurchaseOrderController extends Controller
                         'New Purchase Order',
                         "A new Purchase Order #{$purchaseOrder->po_number} has been created for your awarded bid.",
                         $supplierUser->id,
-                        $purchaseOrder->creator->id,
+                        $request->user()->id,
                         $purchaseOrder->id,
                         'purchase_order'
                     );
@@ -330,30 +351,122 @@ class PurchaseOrderController extends Controller
     public function approve(Request $request, $id)
     {
         try {
-            $purchaseOrder = PurchaseOrder::findOrFail($id);
+            $validator = Validator::make($request->all(), [
+                'approval_notes' => 'nullable|string|max:1000',
+                'approved_amount' => 'nullable|numeric|min:0',
+            ]);
 
-            if ($purchaseOrder->status !== 'pending_approval') {
+            if ($validator->fails()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Only purchase orders pending approval can be approved'
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+
+            if (!$purchaseOrder->canBeApproved()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Purchase order cannot be approved in current status'
                 ], 400);
             }
+
+            $oldStatus = $purchaseOrder->status;
+            $approvedAmount = $request->get('approved_amount', $purchaseOrder->total_amount);
 
             $purchaseOrder->update([
                 'status' => 'approved',
                 'approved_at' => now(),
                 'approved_by' => $request->user()->id,
+                'approval_notes' => $request->approval_notes,
+                'approved_amount' => $approvedAmount,
+                'current_approval_step' => $purchaseOrder->current_approval_step + 1,
             ]);
+
+            // Record status change in history
+            $purchaseOrder->recordStatusChange(
+                $oldStatus, 
+                'approved', 
+                $request->user()->id, 
+                $request->approval_notes,
+                ['approved_amount' => $approvedAmount]
+            );
+
+            // Send email notification
+            $this->sendPOEmailNotification($purchaseOrder, 'approved', 'supplier');
 
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order approved successfully',
-                'data' => $purchaseOrder
+                'data' => $purchaseOrder->load(['rfq', 'supplierCompany', 'buyerCompany', 'creator', 'items'])
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to approve purchase order',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Reject a purchase order.
+     */
+    public function reject(Request $request, $id)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'rejection_reason' => 'required|string|max:1000',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+
+            if (!$purchaseOrder->canBeRejected()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Purchase order cannot be rejected in current status'
+                ], 400);
+            }
+
+            $oldStatus = $purchaseOrder->status;
+
+            $purchaseOrder->update([
+                'status' => 'rejected',
+                'rejected_at' => now(),
+                'rejected_by' => $request->user()->id,
+                'rejection_reason' => $request->rejection_reason,
+            ]);
+
+            // Record status change in history
+            $purchaseOrder->recordStatusChange(
+                $oldStatus, 
+                'rejected', 
+                $request->user()->id, 
+                $request->rejection_reason
+            );
+
+            // Send email notification
+            $this->sendPOEmailNotification($purchaseOrder, 'rejected', 'supplier');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order rejected successfully',
+                'data' => $purchaseOrder->load(['rfq', 'supplierCompany', 'buyerCompany', 'creator', 'items'])
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reject purchase order',
                 'error' => $e->getMessage()
             ], 500);
         }
@@ -503,6 +616,251 @@ class PurchaseOrderController extends Controller
     }
 
     /**
+     * Modify a purchase order.
+     */
+    public function modify(Request $request, $id)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'field_name' => 'required|string',
+                'new_value' => 'required',
+                'reason' => 'required|string|max:1000',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+
+            if (!$purchaseOrder->canBeModified()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Purchase order cannot be modified in current status'
+                ], 400);
+            }
+
+            // Check if field can be modified
+            $allowedFields = [
+                'delivery_address',
+                'payment_terms',
+                'notes',
+                'expected_delivery_date',
+                'terms_conditions',
+                'internal_notes'
+            ];
+
+            if (!in_array($request->field_name, $allowedFields)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Field cannot be modified'
+                ], 400);
+            }
+
+            $oldValue = $purchaseOrder->{$request->field_name};
+
+            // Record modification
+            $modification = $purchaseOrder->recordModification(
+                $request->field_name,
+                $oldValue,
+                $request->new_value,
+                $request->user()->id,
+                $request->reason
+            );
+
+            // Update the field if modification is auto-approved
+            if ($purchaseOrder->status === 'draft') {
+                $purchaseOrder->update([
+                    $request->field_name => $request->new_value,
+                    'last_modified_by' => $request->user()->id,
+                    'last_modified_at' => now(),
+                ]);
+
+                $modification->update([
+                    'status' => 'approved',
+                    'approved_by' => $request->user()->id,
+                    'approved_at' => now(),
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Modification request created successfully',
+                'data' => $modification
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create modification request',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Approve a modification.
+     */
+    public function approveModification(Request $request, $id, $modificationId)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'approval_notes' => 'nullable|string|max:1000',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+            $modification = $purchaseOrder->modifications()->findOrFail($modificationId);
+
+            if ($modification->status !== 'pending') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Modification is not pending approval'
+                ], 400);
+            }
+
+            // Update the PO field
+            $purchaseOrder->update([
+                $modification->field_name => $modification->new_value,
+                'last_modified_by' => $request->user()->id,
+                'last_modified_at' => now(),
+            ]);
+
+            // Approve the modification
+            $modification->update([
+                'status' => 'approved',
+                'approved_by' => $request->user()->id,
+                'approved_at' => now(),
+                'approval_notes' => $request->approval_notes,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Modification approved successfully',
+                'data' => $modification
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to approve modification',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Reject a modification.
+     */
+    public function rejectModification(Request $request, $id, $modificationId)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'approval_notes' => 'required|string|max:1000',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+            $modification = $purchaseOrder->modifications()->findOrFail($modificationId);
+
+            if ($modification->status !== 'pending') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Modification is not pending approval'
+                ], 400);
+            }
+
+            // Reject the modification
+            $modification->update([
+                'status' => 'rejected',
+                'approved_by' => $request->user()->id,
+                'approved_at' => now(),
+                'approval_notes' => $request->approval_notes,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Modification rejected successfully',
+                'data' => $modification
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reject modification',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get PO status history.
+     */
+    public function statusHistory($id)
+    {
+        try {
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+            $history = $purchaseOrder->statusHistory()
+                ->with('changedBy')
+                ->orderBy('changed_at', 'desc')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $history,
+                'message' => 'Status history retrieved successfully'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve status history',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get PO modifications.
+     */
+    public function modifications($id)
+    {
+        try {
+            $purchaseOrder = PurchaseOrder::findOrFail($id);
+            $modifications = $purchaseOrder->modifications()
+                ->with(['modifiedBy', 'approvedBy'])
+                ->orderBy('modified_at', 'desc')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $modifications,
+                'message' => 'Modifications retrieved successfully'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve modifications',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Send email notification for PO status changes
      */
     private function sendPOEmailNotification(PurchaseOrder $purchaseOrder, string $status, string $recipientType)
@@ -520,7 +878,7 @@ class PurchaseOrderController extends Controller
                 Mail::to($recipientEmail)->send(new PurchaseOrderNotification($purchaseOrder, $status, $recipientType));
             }
         } catch (\Exception $e) {
-            \Log::error('Failed to send PO email notification: ' . $e->getMessage());
+            Log::error('Failed to send PO email notification: ' . $e->getMessage());
         }
     }
 }

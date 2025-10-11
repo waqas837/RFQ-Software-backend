@@ -1,0 +1,6 @@
+Name,Description,SKU,Category ID,Unit of Measure,Specifications,Is Active
+Test Item 1,This is a test item for import functionality,TEST001,1,pcs,"{""color"":""blue"",""size"":""medium""}",Yes
+Test Item 2,Another test item for bulk import,TEST002,2,kg,"{""material"":""steel"",""grade"":""A""}",Yes
+Test Item 3,Third test item with different specs,TEST003,1,m,"{""length"":""100"",""width"":""50""}",No
+Test Item 4,Fourth test item for validation,TEST004,2,pcs,"{""type"":""electronic"",""voltage"":""220V""}",Yes
+Test Item 5,Fifth test item for complete testing,TEST005,1,piece,"{""category"":""office"",""brand"":""test""}",Yes

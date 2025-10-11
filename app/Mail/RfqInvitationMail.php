@@ -18,15 +18,17 @@ class RfqInvitationMail extends Mailable
     public $rfq;
     public $user;
     public $externalEmail;
+    public $invitation;
 
     /**
      * Create a new message instance.
      */
-    public function __construct(Rfq $rfq, User $user = null, string $externalEmail = null)
+    public function __construct(Rfq $rfq, ?User $user = null, ?string $externalEmail = null, $invitation = null)
     {
         $this->rfq = $rfq;
         $this->user = $user;
         $this->externalEmail = $externalEmail;
+        $this->invitation = $invitation;
     }
 
     /**
@@ -50,9 +52,11 @@ class RfqInvitationMail extends Mailable
                 'rfq' => $this->rfq,
                 'user' => $this->user,
                 'externalEmail' => $this->externalEmail,
+                'invitation' => $this->invitation,
                 'recipientName' => $this->user ? $this->user->name : 'Valued Partner',
                 'loginUrl' => config('app.frontend_url') . '/login',
                 'rfqUrl' => config('app.frontend_url') . '/rfqs/' . $this->rfq->id,
+                'registrationUrl' => $this->invitation ? config('app.frontend_url') . '/invitation?token=' . $this->invitation->token : null,
                 'formattedBudget' => $this->rfq->formatted_budget,
             ]
         );

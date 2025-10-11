@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RFQ Invitation</title>
+    <title>Welcome to RFQ System</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -63,40 +63,34 @@
 </head>
 <body>
     <div class="header">
-        <h1>RFQ Invitation</h1>
-        <p>You have been invited to participate in a new Request for Quotation (RFQ)</p>
+        <h1>Welcome to RFQ System!</h1>
+        <p>Your registration has been completed successfully</p>
     </div>
 
     <div class="content">
-        <p>Hello {{ $recipientName }},</p>
+        <p>Hello {{ $user_name }},</p>
         
-        <p>You have been invited to participate in the following RFQ:</p>
+        <p>Welcome to the RFQ System! Your account has been created and you can now participate in the bidding process.</p>
         
         <div class="rfq-details">
-            <h3>{{ $rfq->title }}</h3>
-            <p><strong>Reference:</strong> {{ $rfq->reference_number }}</p>
-            <p><strong>Description:</strong> {{ $rfq->description }}</p>
-            <p><strong>Bid Deadline:</strong> {{ \Carbon\Carbon::parse($rfq->bid_deadline)->format('M d, Y') }}</p>
-            <p><strong>Delivery Date:</strong> {{ \Carbon\Carbon::parse($rfq->delivery_date)->format('M d, Y') }}</p>
-            @if($rfq->budget_min || $rfq->budget_max)
-                <p><strong>Budget Range:</strong> {{ $rfq->formatted_budget }}</p>
-            @endif
+            <h3>RFQ Details</h3>
+            <p><strong>Title:</strong> {{ $rfq_title }}</p>
+            <p><strong>Reference:</strong> {{ $rfq_reference }}</p>
+            <p><strong>Bid Deadline:</strong> {{ $bid_deadline }}</p>
         </div>
 
-        @if($user)
-            <p>To view the complete RFQ details and submit your quotation, please click the button below:</p>
-            <a href="{{ $rfqUrl }}" class="button">View RFQ Details</a>
-        @else
-            <p>To participate in this RFQ, click the button below. We'll check if you have an account and guide you accordingly:</p>
-            <a href="{{ $registrationUrl }}" class="button">Participate in RFQ</a>
-            
-            <p><strong>Note:</strong> If you don't have an account, you'll be guided through registration. If you do, you'll be asked to login. After that, you can immediately submit your bid.</p>
-        @endif
+        <p>You can now log in to your account and submit your bid for this RFQ:</p>
         
-        <p>If you have any questions about this RFQ, please contact the RFQ creator directly.</p>
+        <a href="{{ $rfq_url }}" class="button">Submit Your Bid</a>
+        
+        <p>If you need to log in first, you can use the login page:</p>
+        
+        <a href="{{ $login_url }}" class="button">Login to Account</a>
+        
+        <p>If you have any questions about this RFQ or need assistance, please contact the RFQ creator directly.</p>
         
         <p>Best regards,<br>
-        RFQ System</p>
+        RFQ System Team</p>
     </div>
 
     <div class="footer">

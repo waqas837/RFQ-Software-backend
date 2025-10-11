@@ -161,7 +161,7 @@ class EmailService
             $data = [
                 'rfq_title' => $rfq->title,
                 'rfq_description' => $rfq->description,
-                'deadline' => $rfq->deadline->format('F j, Y \a\t g:i A'),
+                'deadline' => $rfq->deadline ? $rfq->deadline->format('F j, Y \a\t g:i A') : 'TBD',
                 'buyer_name' => $buyer->companies->first()->name ?? $buyer->name,
                 'rfq_link' => config('app.frontend_url') . '/rfqs/' . $rfq->id,
                 'contact_email' => $buyer->email,
@@ -202,9 +202,9 @@ class EmailService
                 'supplier_name' => $supplier->companies->first()->name ?? $supplier->name,
                 'rfq_title' => $rfq->title,
                 'bid_amount' => '$' . number_format($bid->total_amount, 2),
-                'submission_date' => $bid->created_at->format('F j, Y \a\t g:i A'),
+                'submission_date' => $bid->created_at ? $bid->created_at->format('F j, Y \a\t g:i A') : 'Unknown',
                 'confirmation_number' => 'BID-' . str_pad($bid->id, 6, '0', STR_PAD_LEFT),
-                'rfq_deadline' => $rfq->deadline->format('F j, Y \a\t g:i A'),
+                'rfq_deadline' => $rfq->deadline ? $rfq->deadline->format('F j, Y \a\t g:i A') : 'TBD',
             ];
 
             // Use dedicated mailable for bid confirmations
@@ -229,7 +229,7 @@ class EmailService
                 'supplier_name' => $supplier->companies->first()->name ?? $supplier->name,
                 'rfq_title' => $rfq->title,
                 'bid_amount' => '$' . number_format($bid->total_amount, 2),
-                'submission_date' => $bid->created_at->format('F j, Y \a\t g:i A'),
+                'submission_date' => $bid->created_at ? $bid->created_at->format('F j, Y \a\t g:i A') : 'Unknown',
                 'buyer_name' => $buyer->companies->first()->name ?? $buyer->name,
                 'bid_link' => config('app.frontend_url') . '/bids/' . $bid->id,
             ];
@@ -250,7 +250,7 @@ class EmailService
         try {
             $data = [
                 'rfq_title' => $rfq->title,
-                'deadline' => $rfq->deadline->format('F j, Y \a\t g:i A'),
+                'deadline' => $rfq->deadline ? $rfq->deadline->format('F j, Y \a\t g:i A') : 'TBD',
                 'days_remaining' => $daysRemaining,
                 'rfq_link' => config('app.frontend_url') . '/rfqs/' . $rfq->id,
                 'buyer_name' => $buyer->companies->first()->name ?? $buyer->name,
@@ -287,7 +287,7 @@ class EmailService
                 'po_number' => $purchaseOrder->po_number,
                 'po_amount' => '$' . number_format($purchaseOrder->total_amount, 2),
                 'rfq_title' => $rfq->title,
-                'delivery_date' => $purchaseOrder->delivery_date->format('F j, Y'),
+                'delivery_date' => $purchaseOrder->delivery_date ? $purchaseOrder->delivery_date->format('F j, Y') : 'TBD',
                 'buyer_name' => $buyer->companies->first()->name ?? $buyer->name,
                 'po_link' => config('app.frontend_url') . '/purchase-orders/' . $purchaseOrder->id,
             ];

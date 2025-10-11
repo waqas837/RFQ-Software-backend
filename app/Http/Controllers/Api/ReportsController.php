@@ -591,6 +591,334 @@ class ReportsController extends Controller
     }
 
     /**
+     * Export reports to PDF or Excel.
+     */
+    public function export(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            // Check if user is authenticated
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Authentication required',
+                    'error' => 'User not authenticated'
+                ], 401);
+            }
+            
+            $type = $request->get('type', 'overview');
+            $period = $request->get('period', 30);
+            $format = $request->get('format', 'pdf');
+            
+            $startDate = Carbon::now()->subDays($period);
+            $data = [];
+
+            // Get data based on report type
+            switch ($type) {
+                case 'overview':
+                    $data = $this->getDashboardData($user, $startDate);
+                    break;
+                case 'rfq':
+                    $data = $this->getRfqAnalysisData($user, $startDate);
+                    break;
+                case 'supplier':
+                    $data = $this->getSupplierPerformanceData($user, $startDate);
+                    break;
+                case 'cost':
+                    $data = $this->getCostSavingsData($user, $startDate);
+                    break;
+                default:
+                    $data = $this->getDashboardData($user, $startDate);
+            }
+
+            if ($format === 'pdf') {
+                return $this->generatePdfReport($data, $type, $user);
+            } else {
+                return $this->generateExcelReport($data, $type, $user);
+            }
+
+        } catch (\Exception $e) {
+            \Log::error('Export error: ' . $e->getMessage());
+            \Log::error('Export stack trace: ' . $e->getTraceAsString());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to export report: ' . $e->getMessage(),
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Generate PDF report.
+     */
+    private function generatePdfReport($data, $type, $user)
+    {
+        try {
+            $filename = "{$type}_report_" . now()->format('Y-m-d_H-i-s') . ".pdf";
+            
+            // Create HTML content for PDF
+            $html = $this->generateReportHtml($data, $type, $user);
+            
+            // For now, return HTML content that can be printed to PDF
+            // In production, use DomPDF or Snappy for actual PDF generation
+            return response($html)
+                ->header('Content-Type', 'text/html')
+                ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+                
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to generate PDF report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Generate Excel report.
+     */
+    private function generateExcelReport($data, $type, $user)
+    {
+        try {
+            $filename = "{$type}_report_" . now()->format('Y-m-d_H-i-s') . ".csv";
+            
+            // Generate CSV content
+            $csv = $this->generateReportCsv($data, $type, $user);
+            
+            return response($csv)
+                ->header('Content-Type', 'text/csv')
+                ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+                
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to generate Excel report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get dashboard data for export.
+     */
+    private function getDashboardData($user, $startDate)
+    {
+        try {
+            if ($user->isAdmin()) {
+                return [
+                    'total_rfqs' => Rfq::count(),
+                    'active_rfqs' => Rfq::whereIn('status', ['published', 'bidding_open'])->count(),
+                    'total_bids' => Bid::count(),
+                    'total_suppliers' => Company::where('type', 'supplier')->count(),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            } elseif ($user->isBuyer()) {
+                return [
+                    'my_rfqs' => Rfq::where('created_by', $user->id)->count(),
+                    'active_rfqs' => Rfq::where('created_by', $user->id)->whereIn('status', ['published', 'bidding_open'])->count(),
+                    'total_bids_received' => Bid::whereHas('rfq', function ($q) use ($user) {
+                        $q->where('created_by', $user->id);
+                    })->count(),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            } else {
+                return [
+                    'my_bids' => Bid::where('supplier_id', $user->id)->count(),
+                    'awarded_bids' => Bid::where('supplier_id', $user->id)->where('status', 'awarded')->count(),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            }
+        } catch (\Exception $e) {
+            \Log::error('getDashboardData error: ' . $e->getMessage());
+            return [
+                'error' => 'Failed to fetch dashboard data',
+                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+            ];
+        }
+    }
+
+    /**
+     * Get RFQ analysis data for export.
+     */
+    private function getRfqAnalysisData($user, $startDate)
+    {
+        try {
+            return [
+                'rfq_status_distribution' => $this->getRfqStatusDistribution($user->isBuyer() ? $user->id : null),
+                'category_distribution' => $this->getCategoryDistribution($user->isBuyer() ? $user->id : null),
+                'average_bids_per_rfq' => $this->getAverageBidsPerRfq($user->isBuyer() ? $user->id : null),
+                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+            ];
+        } catch (\Exception $e) {
+            \Log::error('getRfqAnalysisData error: ' . $e->getMessage());
+            return [
+                'error' => 'Failed to fetch RFQ analysis data',
+                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+            ];
+        }
+    }
+
+    /**
+     * Get supplier performance data for export.
+     */
+    private function getSupplierPerformanceData($user, $startDate)
+    {
+        try {
+            if ($user->isAdmin()) {
+                return [
+                    'top_suppliers' => $this->getTopSuppliers($startDate),
+                    'supplier_win_rates' => $this->getSupplierWinRates($startDate),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            } else {
+                $userCompany = $user->companies->first();
+                if ($userCompany) {
+                    return [
+                        'my_performance' => $this->getMySupplierPerformance($userCompany->id, $startDate),
+                        'my_win_rate' => $this->getMyWinRate($userCompany->id, $startDate),
+                        'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                    ];
+                } else {
+                    return [
+                        'error' => 'No company found for user',
+                        'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                    ];
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::error('getSupplierPerformanceData error: ' . $e->getMessage());
+            return [
+                'error' => 'Failed to fetch supplier performance data',
+                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+            ];
+        }
+    }
+
+    /**
+     * Get cost savings data for export.
+     */
+    private function getCostSavingsData($user, $startDate)
+    {
+        try {
+            if ($user->isAdmin()) {
+                return [
+                    'total_savings' => $this->getTotalSavings($startDate),
+                    'average_savings_per_rfq' => $this->getAverageSavingsPerRfq($startDate),
+                    'savings_by_category' => $this->getSavingsByCategory($startDate),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            } else {
+                return [
+                    'my_total_savings' => $this->getTotalSavings($startDate, $user->id),
+                    'my_average_savings' => $this->getAverageSavingsPerRfq($startDate, $user->id),
+                    'my_savings_by_category' => $this->getSavingsByCategory($startDate, $user->id),
+                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+                ];
+            }
+        } catch (\Exception $e) {
+            \Log::error('getCostSavingsData error: ' . $e->getMessage());
+            return [
+                'error' => 'Failed to fetch cost savings data',
+                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
+            ];
+        }
+    }
+
+    /**
+     * Generate HTML content for PDF reports.
+     */
+    private function generateReportHtml($data, $type, $user)
+    {
+        $html = '<!DOCTYPE html>
+        <html>
+        <head>
+            <title>' . ucfirst($type) . ' Report</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .header { text-align: center; margin-bottom: 30px; }
+                .section { margin-bottom: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+                .metric { display: inline-block; margin: 10px; padding: 15px; border: 1px solid #ddd; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>' . ucfirst($type) . ' Report</h1>
+                <p>Generated on: ' . now()->format('Y-m-d H:i:s') . '</p>
+                <p>User: ' . $user->name . ' (' . $user->role . ')</p>
+            </div>';
+
+        // Add data based on report type
+        switch ($type) {
+            case 'overview':
+                $html .= '<div class="section">
+                    <h2>Overview Metrics</h2>';
+                foreach ($data as $key => $value) {
+                    if (is_array($value)) continue;
+                    $html .= '<div class="metric"><strong>' . ucfirst(str_replace('_', ' ', $key)) . ':</strong> ' . $value . '</div>';
+                }
+                $html .= '</div>';
+                break;
+                
+            case 'rfq':
+                $html .= '<div class="section">
+                    <h2>RFQ Analysis</h2>';
+                foreach ($data as $key => $value) {
+                    if (is_array($value)) continue;
+                    $html .= '<div class="metric"><strong>' . ucfirst(str_replace('_', ' ', $key)) . ':</strong> ' . $value . '</div>';
+                }
+                $html .= '</div>';
+                break;
+                
+            case 'supplier':
+                $html .= '<div class="section">
+                    <h2>Supplier Performance</h2>';
+                foreach ($data as $key => $value) {
+                    if (is_array($value)) continue;
+                    $html .= '<div class="metric"><strong>' . ucfirst(str_replace('_', ' ', $key)) . ':</strong> ' . $value . '</div>';
+                }
+                $html .= '</div>';
+                break;
+                
+            case 'cost':
+                $html .= '<div class="section">
+                    <h2>Cost Savings</h2>';
+                foreach ($data as $key => $value) {
+                    if (is_array($value)) continue;
+                    $html .= '<div class="metric"><strong>' . ucfirst(str_replace('_', ' ', $key)) . ':</strong> $' . number_format($value, 2) . '</div>';
+                }
+                $html .= '</div>';
+                break;
+        }
+
+        $html .= '</body></html>';
+        return $html;
+    }
+
+    /**
+     * Generate CSV content for Excel reports.
+     */
+    private function generateReportCsv($data, $type, $user)
+    {
+        $csv = "Report Type,{$type}\n";
+        $csv .= "Generated On," . now()->format('Y-m-d H:i:s') . "\n";
+        $csv .= "User,{$user->name} ({$user->role})\n";
+        $csv .= "\n";
+        
+        // Add data rows
+        foreach ($data as $key => $value) {
+            if (is_array($value)) continue;
+            $csv .= ucfirst(str_replace('_', ' ', $key)) . "," . $value . "\n";
+        }
+        
+        return $csv;
+    }
+
+    /**
      * Get supplier monthly trends.
      */
     private function getSupplierMonthlyTrends($startDate, $userId)

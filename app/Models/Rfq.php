@@ -49,6 +49,7 @@ class Rfq extends Model
     protected $appends = [
         'delivery_deadline',
         'bidding_deadline',
+        'formatted_budget',
     ];
 
     /**
@@ -66,6 +67,7 @@ class Rfq extends Model
     {
         return $this->bid_deadline;
     }
+
 
     /**
      * Get the category of the RFQ.
@@ -121,6 +123,29 @@ class Rfq extends Model
     public function purchaseOrders()
     {
         return $this->hasMany(PurchaseOrder::class);
+    }
+
+    /**
+     * Get formatted budget with currency symbol.
+     */
+    public function getFormattedBudgetAttribute()
+    {
+        if (!$this->budget_min && !$this->budget_max) {
+            return 'Not specified';
+        }
+
+        $currencyService = app(\App\Services\CurrencyService::class);
+        $symbol = $currencyService->getSymbol($this->currency);
+        
+        if ($this->budget_min && $this->budget_max) {
+            return $symbol . number_format($this->budget_min) . ' - ' . $symbol . number_format($this->budget_max);
+        } elseif ($this->budget_min) {
+            return 'From ' . $symbol . number_format($this->budget_min);
+        } elseif ($this->budget_max) {
+            return 'Up to ' . $symbol . number_format($this->budget_max);
+        }
+        
+        return 'Not specified';
     }
 
 
@@ -229,6 +254,38 @@ class Rfq extends Model
     }
 
     /**
+     * Check if RFQ is still accepting bids (not expired and in correct status).
+     */
+    public function isAcceptingBids(): bool
+    {
+        // Check if RFQ is in a status that allows bidding
+        if (!in_array($this->status, ['bidding_open', 'published'])) {
+            return false;
+        }
+
+        // Check if bidding deadline has passed
+        if ($this->isBiddingExpired()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if RFQ bidding deadline has passed.
+     */
+    public function isBiddingExpired(): bool
+    {
+        if (!$this->bid_deadline) {
+            return false;
+        }
+        
+        // Allow bidding until end of deadline day (23:59:59)
+        $endOfDeadlineDay = $this->bid_deadline->copy()->endOfDay();
+        return now()->isAfter($endOfDeadlineDay);
+    }
+
+    /**
      * Check if RFQ is under evaluation.
      */
     public function isUnderEvaluation(): bool
@@ -260,24 +317,6 @@ class Rfq extends Model
         return $this->isStatus('cancelled');
     }
 
-    /**
-     * Get formatted budget range with currency symbol.
-     */
-    public function getFormattedBudgetAttribute()
-    {
-        $currencyService = app(\App\Services\CurrencyService::class);
-        $symbol = $currencyService->getSymbol($this->currency);
-        
-        if ($this->budget_min && $this->budget_max) {
-            return $symbol . ' ' . number_format($this->budget_min, 2) . ' - ' . $symbol . ' ' . number_format($this->budget_max, 2);
-        } elseif ($this->budget_max) {
-            return 'Up to ' . $symbol . ' ' . number_format($this->budget_max, 2);
-        } elseif ($this->budget_min) {
-            return 'From ' . $symbol . ' ' . number_format($this->budget_min, 2);
-        }
-        
-        return 'Budget not specified';
-    }
 
     /**
      * Convert budget to another currency.

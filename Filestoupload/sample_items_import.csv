@@ -1,0 +1,6 @@
+Name,Description,SKU,Category ID,Unit of Measure,Specifications,Is Active
+Office Chair,Ergonomic office chair with lumbar support,CHAIR001,1,pcs,"{""color"":""black"",""material"":""leather"",""weight_capacity"":""250kg""}",Yes
+Laptop Computer,High-performance business laptop,LAPTOP001,2,unit,"{""brand"":""Dell"",""processor"":""Intel i7"",""ram"":""16GB"",""storage"":""512GB SSD""}",Yes
+Steel Bolts,Industrial grade steel bolts,BOLT001,3,kg,"{""diameter"":""M8"",""length"":""20mm"",""material"":""stainless steel""}",Yes
+Printer Paper,A4 white printer paper,PAPER001,4,ream,"{""size"":""A4"",""weight"":""80gsm"",""color"":""white""}",Yes
+Safety Helmet,Construction safety helmet,HELMET001,5,piece,"{""color"":""yellow"",""size"":""adjustable"",""standard"":""ANSI Z89.1""}",Yes

@@ -36,10 +36,64 @@ Route::post('/verify-email', [AuthController::class, 'verifyEmail']);
 Route::post('/resend-verification', [AuthController::class, 'resendVerification']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+Route::post('/profile/verify-email-update', [UserController::class, 'verifyEmailUpdate']);
 Route::post('/check-status', [AuthController::class, 'checkStatus']);
 
 // Public template downloads
 Route::get('/rfqs/template/{type}', [RfqController::class, 'downloadTemplate']);
+
+// Supplier registration routes (public)
+Route::post('/supplier-register', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'registerFromInvitation']);
+Route::get('/supplier-invitation/validate', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'validateInvitation']);
+Route::post('/check-user-exists', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'checkUserExists']);
+
+// Public file downloads - outside protected routes
+Route::get('/downloads/{filename}', function ($filename) {
+    // Sanitize filename
+    $filename = basename($filename);
+    
+    // Check exports directory first
+    $exportPath = storage_path('app/exports/' . $filename);
+    if (file_exists($exportPath)) {
+        return response()->file($exportPath, [
+            'Content-Type' => 'application/octet-stream',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"'
+        ]);
+    }
+    
+    // Check Filestoupload directory for sample files
+    $filePath = base_path('Filestoupload/' . $filename);
+    if (file_exists($filePath)) {
+        return response()->file($filePath, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"'
+        ]);
+    }
+    
+    return response()->json(['error' => 'File not found: ' . $filename], 404);
+})->name('downloads');
+
+// Serve attachment files from storage
+Route::get('/attachments/{path}', function ($path) {
+    // Try public storage first (where files are actually stored)
+    $filePath = storage_path('app/public/' . $path);
+    
+    if (!file_exists($filePath)) {
+        // Fallback to regular storage
+        $filePath = storage_path('app/' . $path);
+        
+        if (!file_exists($filePath)) {
+            return response()->json(['error' => 'File not found: ' . $path], 404);
+        }
+    }
+    
+    $filename = basename($filePath);
+    $mimeType = mime_content_type($filePath);
+    
+    return response()->download($filePath, $filename, [
+        'Content-Type' => $mimeType
+    ]);
+})->where('path', '.*');
 
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -51,6 +105,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Get users for invitations (Buyers and Admins)
     Route::get('/users/for-invitations', [UserController::class, 'getUsersForInvitations']);
+    
+    // User profile routes (authenticated users)
+    Route::get('/profile', [UserController::class, 'profile']);
+    Route::put('/profile', [UserController::class, 'updateProfile']);
+    Route::post('/profile/request-email-update', [UserController::class, 'requestEmailUpdate']);
+    Route::get('/users/others', [UserController::class, 'getOtherUsers']);
+    Route::get('/users/{id}/profile', [UserController::class, 'getUserProfile']);
 
     // User management (Admin only)
     Route::middleware('role:admin')->group(function () {
@@ -129,15 +190,26 @@ Route::middleware('auth:sanctum')->group(function () {
     // Purchase Order management
     Route::apiResource('purchase-orders', PurchaseOrderController::class);
     Route::post('/purchase-orders/{purchaseOrder}/approve', [PurchaseOrderController::class, 'approve']);
+    Route::post('/purchase-orders/{purchaseOrder}/reject', [PurchaseOrderController::class, 'reject']);
     Route::post('/purchase-orders/{purchaseOrder}/send', [PurchaseOrderController::class, 'send']);
     Route::post('/purchase-orders/{purchaseOrder}/confirm', [PurchaseOrderController::class, 'confirm']);
     Route::post('/purchase-orders/{purchaseOrder}/confirm-delivery', [PurchaseOrderController::class, 'confirmDelivery']);
+    
+    // PO Modification routes
+    Route::post('/purchase-orders/{purchaseOrder}/modify', [PurchaseOrderController::class, 'modify']);
+    Route::post('/purchase-orders/{purchaseOrder}/modifications/{modification}/approve', [PurchaseOrderController::class, 'approveModification']);
+    Route::post('/purchase-orders/{purchaseOrder}/modifications/{modification}/reject', [PurchaseOrderController::class, 'rejectModification']);
+    
+    // PO Tracking routes
+    Route::get('/purchase-orders/{purchaseOrder}/status-history', [PurchaseOrderController::class, 'statusHistory']);
+    Route::get('/purchase-orders/{purchaseOrder}/modifications', [PurchaseOrderController::class, 'modifications']);
 
     // Reports and Analytics
     Route::get('/reports/dashboard', [ReportsController::class, 'dashboard']);
     Route::get('/reports/rfq-analysis', [ReportsController::class, 'rfqAnalysis']);
     Route::get('/reports/supplier-performance', [ReportsController::class, 'supplierPerformance']);
     Route::get('/reports/cost-savings', [ReportsController::class, 'costSavings']);
+    Route::post('/reports/export', [ReportsController::class, 'export']);
 
     // Notifications
     Route::get('/notifications', [NotificationController::class, 'index']);
