@@ -181,46 +181,6 @@ class ReportsController extends Controller
         }
     }
 
-    /**
-     * Get cost savings data.
-     */
-    public function costSavings(Request $request)
-    {
-        try {
-            $user = $request->user();
-            $period = $request->get('period', 30);
-            $startDate = Carbon::now()->subDays($period);
-
-            $savings = [];
-
-            if ($user->isAdmin()) {
-                $savings = [
-                    'total_savings' => $this->getTotalSavings($startDate),
-                    'average_savings_per_rfq' => $this->getAverageSavingsPerRfq($startDate),
-                    'savings_by_category' => $this->getSavingsByCategory($startDate),
-                    'monthly_savings_trend' => $this->getMonthlySavingsTrend($startDate),
-                ];
-            } elseif ($user->isBuyer()) {
-                $savings = [
-                    'my_total_savings' => $this->getTotalSavings($startDate, $user->id),
-                    'my_average_savings' => $this->getAverageSavingsPerRfq($startDate, $user->id),
-                    'my_savings_by_category' => $this->getSavingsByCategory($startDate, $user->id),
-                ];
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $savings,
-                'message' => 'Cost savings data retrieved successfully'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to retrieve cost savings data',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
 
     /**
      * Get monthly trends data.
@@ -320,21 +280,20 @@ class ReportsController extends Controller
      */
     private function getAverageBidsPerRfq($userId = null)
     {
-        $query = DB::table('rfqs')
+        $subQuery = DB::table('rfqs')
             ->leftJoin('bids', 'rfqs.id', '=', 'bids.rfq_id')
-            ->selectRaw('AVG(bid_count) as average_bids')
-            ->fromSub(function ($subQuery) use ($userId) {
-                $subQuery->from('rfqs')
-                    ->leftJoin('bids', 'rfqs.id', '=', 'bids.rfq_id')
-                    ->selectRaw('rfqs.id, COUNT(bids.id) as bid_count')
-                    ->groupBy('rfqs.id');
-                    
-                if ($userId) {
-                    $subQuery->where('rfqs.created_by', $userId);
-                }
-            }, 'rfq_bid_counts');
+            ->selectRaw('rfqs.id, COUNT(bids.id) as bid_count')
+            ->groupBy('rfqs.id');
             
-        $result = $query->first();
+        if ($userId) {
+            $subQuery->where('rfqs.created_by', $userId);
+        }
+        
+        $result = DB::table(DB::raw("({$subQuery->toSql()}) as rfq_bid_counts"))
+            ->mergeBindings($subQuery)
+            ->selectRaw('AVG(bid_count) as average_bids')
+            ->first();
+            
         return round($result->average_bids ?? 0, 2);
     }
 
@@ -468,94 +427,9 @@ class ReportsController extends Controller
         return round($result->avg_response_days ?? 0, 1);
     }
 
-    /**
-     * Get total savings.
-     */
-    private function getTotalSavings($startDate, $userId = null)
-    {
-        $query = DB::table('rfqs')
-            ->join('bids', function($join) {
-                $join->on('rfqs.id', '=', 'bids.rfq_id')
-                     ->where('bids.status', '=', 'awarded');
-            })
-            ->selectRaw('SUM(rfqs.budget - bids.total_amount) as total_savings')
-            ->where('rfqs.created_at', '>=', $startDate)
-            ->whereNotNull('rfqs.budget');
-            
-        if ($userId) {
-            $query->where('rfqs.created_by', $userId);
-        }
-        
-        $result = $query->first();
-        return $result->total_savings ?? 0;
-    }
 
-    /**
-     * Get average savings per RFQ.
-     */
-    private function getAverageSavingsPerRfq($startDate, $userId = null)
-    {
-        $query = DB::table('rfqs')
-            ->join('bids', function($join) {
-                $join->on('rfqs.id', '=', 'bids.rfq_id')
-                     ->where('bids.status', '=', 'awarded');
-            })
-            ->selectRaw('AVG(rfqs.budget - bids.total_amount) as avg_savings')
-            ->where('rfqs.created_at', '>=', $startDate)
-            ->whereNotNull('rfqs.budget');
-            
-        if ($userId) {
-            $query->where('rfqs.created_by', $userId);
-        }
-        
-        $result = $query->first();
-        return round($result->avg_savings ?? 0, 2);
-    }
 
-    /**
-     * Get savings by category.
-     */
-    private function getSavingsByCategory($startDate, $userId = null)
-    {
-        $query = DB::table('rfqs')
-            ->join('bids', function($join) {
-                $join->on('rfqs.id', '=', 'bids.rfq_id')
-                     ->where('bids.status', '=', 'awarded');
-            })
-            ->join('rfq_items', 'rfqs.id', '=', 'rfq_items.rfq_id')
-            ->join('items', 'rfq_items.item_id', '=', 'items.id')
-            ->join('categories', 'items.category_id', '=', 'categories.id')
-            ->selectRaw('categories.name, SUM(rfqs.budget - bids.total_amount) as savings')
-            ->where('rfqs.created_at', '>=', $startDate)
-            ->whereNotNull('rfqs.budget')
-            ->groupBy('categories.id', 'categories.name')
-            ->orderBy('savings', 'desc');
-            
-        if ($userId) {
-            $query->where('rfqs.created_by', $userId);
-        }
-        
-        return $query->get();
-    }
 
-    /**
-     * Get monthly savings trend.
-     */
-    private function getMonthlySavingsTrend($startDate)
-    {
-        return DB::table('rfqs')
-            ->join('bids', function($join) {
-                $join->on('rfqs.id', '=', 'bids.rfq_id')
-                     ->where('bids.status', '=', 'awarded');
-            })
-            ->selectRaw('DATE_FORMAT(rfqs.created_at, "%Y-%m") as month, 
-                        SUM(rfqs.budget - bids.total_amount) as savings')
-            ->where('rfqs.created_at', '>=', $startDate)
-            ->whereNotNull('rfqs.budget')
-            ->groupBy('month')
-            ->orderBy('month')
-            ->get();
-    }
 
     /**
      * Calculate supplier success rate.
@@ -624,9 +498,6 @@ class ReportsController extends Controller
                     break;
                 case 'supplier':
                     $data = $this->getSupplierPerformanceData($user, $startDate);
-                    break;
-                case 'cost':
-                    $data = $this->getCostSavingsData($user, $startDate);
                     break;
                 default:
                     $data = $this->getDashboardData($user, $startDate);
@@ -796,35 +667,6 @@ class ReportsController extends Controller
         }
     }
 
-    /**
-     * Get cost savings data for export.
-     */
-    private function getCostSavingsData($user, $startDate)
-    {
-        try {
-            if ($user->isAdmin()) {
-                return [
-                    'total_savings' => $this->getTotalSavings($startDate),
-                    'average_savings_per_rfq' => $this->getAverageSavingsPerRfq($startDate),
-                    'savings_by_category' => $this->getSavingsByCategory($startDate),
-                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
-                ];
-            } else {
-                return [
-                    'my_total_savings' => $this->getTotalSavings($startDate, $user->id),
-                    'my_average_savings' => $this->getAverageSavingsPerRfq($startDate, $user->id),
-                    'my_savings_by_category' => $this->getSavingsByCategory($startDate, $user->id),
-                    'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
-                ];
-            }
-        } catch (\Exception $e) {
-            \Log::error('getCostSavingsData error: ' . $e->getMessage());
-            return [
-                'error' => 'Failed to fetch cost savings data',
-                'period' => $startDate->format('Y-m-d') . ' to ' . now()->format('Y-m-d')
-            ];
-        }
-    }
 
     /**
      * Generate HTML content for PDF reports.
@@ -884,15 +726,6 @@ class ReportsController extends Controller
                 $html .= '</div>';
                 break;
                 
-            case 'cost':
-                $html .= '<div class="section">
-                    <h2>Cost Savings</h2>';
-                foreach ($data as $key => $value) {
-                    if (is_array($value)) continue;
-                    $html .= '<div class="metric"><strong>' . ucfirst(str_replace('_', ' ', $key)) . ':</strong> $' . number_format($value, 2) . '</div>';
-                }
-                $html .= '</div>';
-                break;
         }
 
         $html .= '</body></html>';

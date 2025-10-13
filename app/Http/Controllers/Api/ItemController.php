@@ -3,25 +3,99 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use OpenApi\Annotations as OA;
 use App\Models\Item;
 use App\Models\Category;
 use App\Models\ItemTemplate;
 use App\Models\ItemCustomField;
+use App\Models\ItemAttachment;
 use App\Enums\FieldType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 
+/**
+ * @OA\Info(
+ *     title="RFQ Software API",
+ *     version="1.0.0",
+ *     description="API for RFQ (Request for Quotation) Software",
+ *     @OA\Contact(
+ *         email="support@rfqsoftware.com"
+ *     )
+ * )
+ * @OA\Server(
+ *     url="http://localhost:8000/api",
+ *     description="Development Server"
+ * )
+ * @OA\SecurityScheme(
+ *     securityScheme="sanctum",
+ *     type="http",
+ *     scheme="bearer",
+ *     bearerFormat="JWT"
+ * )
+ */
 class ItemController extends Controller
 {
     /**
-     * Get all items with pagination and filtering.
+     * @OA\Get(
+     *     path="/items",
+     *     summary="Get all items",
+     *     description="Retrieve a paginated list of items with optional filtering",
+     *     tags={"Items"},
+     *     security={{"sanctum":{}}},
+     *     @OA\Parameter(
+     *         name="search",
+     *         in="query",
+     *         description="Search term for name, description, or SKU",
+     *         required=false,
+     *         @OA\Schema(type="string")
+     *     ),
+     *     @OA\Parameter(
+     *         name="category_id",
+     *         in="query",
+     *         description="Filter by category ID",
+     *         required=false,
+     *         @OA\Schema(type="integer")
+     *     ),
+     *     @OA\Parameter(
+     *         name="per_page",
+     *         in="query",
+     *         description="Number of items per page",
+     *         required=false,
+     *         @OA\Schema(type="integer", default=15)
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Successful operation",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="success", type="boolean", example=true),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Item")),
+     *                 @OA\Property(property="current_page", type="integer"),
+     *                 @OA\Property(property="per_page", type="integer"),
+     *                 @OA\Property(property="total", type="integer")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=401,
+     *         description="Unauthorized"
+     *     )
+     * )
      */
     public function index(Request $request)
     {
         try {
-            $items = Item::with(['category', 'creator', 'template', 'customFields'])
+            $relationships = ['category', 'creator', 'template', 'customFields'];
+            
+            // Include attachments if requested
+            if ($request->has('include') && str_contains($request->include, 'attachments')) {
+                $relationships[] = 'attachments';
+            }
+            
+            $items = Item::with($relationships)
                 ->when($request->search, function ($query, $search) {
                     $query->where('name', 'like', "%{$search}%")
                           ->orWhere('description', 'like', "%{$search}%")
@@ -453,4 +527,340 @@ class ItemController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * @OA\Post(
+     *     path="/items/{id}/attachments",
+     *     summary="Upload file attachment for an item",
+     *     description="Upload a file (image or document) to an item",
+     *     tags={"Items"},
+     *     security={{"sanctum":{}}},
+     *     @OA\Parameter(
+     *         name="id",
+     *         in="path",
+     *         description="Item ID",
+     *         required=true,
+     *         @OA\Schema(type="integer")
+     *     ),
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\MediaType(
+     *             mediaType="multipart/form-data",
+     *             @OA\Schema(
+     *                 @OA\Property(
+     *                     property="file",
+     *                     type="string",
+     *                     format="binary",
+     *                     description="File to upload (max 10MB)"
+     *                 ),
+     *                 @OA\Property(
+     *                     property="file_type",
+     *                     type="string",
+     *                     enum={"image", "document"},
+     *                     description="Type of file (optional, auto-detected if not provided)"
+     *                 ),
+     *                 @OA\Property(
+     *                     property="is_primary",
+     *                     type="boolean",
+     *                     description="Set as primary file (optional)"
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="File uploaded successfully",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="success", type="boolean", example=true),
+     *             @OA\Property(property="message", type="string", example="File uploaded successfully"),
+     *             @OA\Property(property="data", ref="#/components/schemas/ItemAttachment")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=400,
+     *         description="Validation error or file limit reached",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="success", type="boolean", example=false),
+     *             @OA\Property(property="message", type="string", example="Validation failed"),
+     *             @OA\Property(property="errors", type="object")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=401,
+     *         description="Unauthorized"
+     *     ),
+     *     @OA\Response(
+     *         response=403,
+     *         description="Forbidden - not authorized to upload files for this item"
+     *     )
+     * )
+     */
+    public function uploadAttachment(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'file' => 'required|file|max:10240|mimes:jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx,txt,csv', // 10MB max with specific file types
+            'file_type' => 'nullable|in:image,document',
+            'is_primary' => 'nullable|boolean',
+        ], [
+            'file.required' => 'Please select a file to upload.',
+            'file.file' => 'The uploaded file is not valid.',
+            'file.max' => 'The file size must not exceed 10MB.',
+            'file.mimes' => 'The file must be one of the following types: jpg, jpeg, png, gif, pdf, doc, docx, xls, xlsx, txt, csv.',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $item = Item::findOrFail($id);
+            $user = $request->user();
+
+            // Check if user has permission to upload files for this item
+            if ($item->created_by !== $user->id && !$user->hasRole(['admin', 'buyer'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not authorized to upload files for this item'
+                ], 403);
+            }
+            
+            // Check file count limit per item (max 20 files per item)
+            $existingFileCount = ItemAttachment::where('item_id', $item->id)->count();
+            if ($existingFileCount >= 20) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Maximum file limit reached for this item (20 files). Please delete some files before uploading new ones.'
+                ], 400);
+            }
+
+            $file = $request->file('file');
+            
+            // Additional security checks
+            $originalName = $file->getClientOriginalName();
+            $mimeType = $file->getMimeType();
+            $fileSize = $file->getSize();
+            
+            // Check for suspicious file names
+            if (preg_match('/[<>:"|?*]/', $originalName)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid file name. Please rename the file and try again.'
+                ], 400);
+            }
+            
+            // Check for executable files
+            $executableExtensions = ['exe', 'bat', 'cmd', 'com', 'pif', 'scr', 'vbs', 'js', 'jar'];
+            $extension = strtolower($file->getClientOriginalExtension());
+            if (in_array($extension, $executableExtensions)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Executable files are not allowed for security reasons.'
+                ], 400);
+            }
+            
+            // Generate secure filename
+            $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
+            $path = $file->storeAs('item-attachments', $filename, 'public');
+
+            // Determine file type
+            $fileType = $request->file_type;
+            if (!$fileType) {
+                $fileType = str_starts_with($file->getMimeType(), 'image/') ? 'image' : 'document';
+            }
+
+            // If this is set as primary, unset other primary files of the same type
+            if ($request->boolean('is_primary')) {
+                ItemAttachment::where('item_id', $item->id)
+                    ->where('file_type', $fileType)
+                    ->update(['is_primary' => false]);
+            }
+
+            $attachment = ItemAttachment::create([
+                'item_id' => $item->id,
+                'uploaded_by' => $user->id,
+                'filename' => $filename,
+                'original_name' => $file->getClientOriginalName(),
+                'file_path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'file_size' => $file->getSize(),
+                'file_type' => $fileType,
+                'is_primary' => $request->boolean('is_primary'),
+                'metadata' => [
+                    'uploaded_at' => now()->toISOString(),
+                    'user_agent' => $request->userAgent(),
+                ],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'File uploaded successfully',
+                'data' => $attachment->load('uploader')
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to upload file',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get attachments for an item.
+     */
+    public function getAttachments($id)
+    {
+        try {
+            $item = Item::findOrFail($id);
+            $attachments = $item->attachments()->with('uploader')->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $attachments
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch attachments',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete an attachment.
+     */
+    public function deleteAttachment($itemId, $attachmentId)
+    {
+        try {
+            $item = Item::findOrFail($itemId);
+            $attachment = ItemAttachment::where('item_id', $item->id)
+                ->where('id', $attachmentId)
+                ->firstOrFail();
+
+            $user = request()->user();
+
+            // Check if user has permission to delete this attachment
+            if ($attachment->uploaded_by !== $user->id && !$user->hasRole(['admin', 'buyer'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not authorized to delete this attachment'
+                ], 403);
+            }
+
+            // Delete the physical file
+            if (file_exists($attachment->full_path)) {
+                unlink($attachment->full_path);
+            }
+
+            // Delete the database record
+            $attachment->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Attachment deleted successfully'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete attachment',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Set primary attachment.
+     */
+    public function setPrimaryAttachment($itemId, $attachmentId)
+    {
+        try {
+            $item = Item::findOrFail($itemId);
+            $attachment = ItemAttachment::where('item_id', $item->id)
+                ->where('id', $attachmentId)
+                ->firstOrFail();
+
+            $user = request()->user();
+
+            // Check if user has permission to modify this attachment
+            if ($attachment->uploaded_by !== $user->id && !$user->hasRole(['admin', 'buyer'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not authorized to modify this attachment'
+                ], 403);
+            }
+
+            // Unset other primary files of the same type
+            ItemAttachment::where('item_id', $item->id)
+                ->where('file_type', $attachment->file_type)
+                ->where('id', '!=', $attachment->id)
+                ->update(['is_primary' => false]);
+
+            // Set this attachment as primary
+            $attachment->update(['is_primary' => true]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Primary attachment updated successfully',
+                'data' => $attachment
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to set primary attachment',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
+
+/**
+ * @OA\Schema(
+ *     schema="Item",
+ *     type="object",
+ *     @OA\Property(property="id", type="integer", example=1),
+ *     @OA\Property(property="name", type="string", example="Laptop Computer"),
+ *     @OA\Property(property="sku", type="string", example="LAP-001"),
+ *     @OA\Property(property="description", type="string", example="High-performance laptop"),
+ *     @OA\Property(property="category_id", type="integer", example=1),
+ *     @OA\Property(property="unit_of_measure", type="string", example="Piece"),
+ *     @OA\Property(property="is_active", type="boolean", example=true),
+ *     @OA\Property(property="specifications", type="object"),
+ *     @OA\Property(property="created_at", type="string", format="date-time"),
+ *     @OA\Property(property="updated_at", type="string", format="date-time"),
+ *     @OA\Property(property="category", ref="#/components/schemas/Category"),
+ *     @OA\Property(property="attachments", type="array", @OA\Items(ref="#/components/schemas/ItemAttachment"))
+ * )
+ * 
+ * @OA\Schema(
+ *     schema="ItemAttachment",
+ *     type="object",
+ *     @OA\Property(property="id", type="integer", example=1),
+ *     @OA\Property(property="item_id", type="integer", example=1),
+ *     @OA\Property(property="filename", type="string", example="1640995200_abc123.jpg"),
+ *     @OA\Property(property="original_name", type="string", example="product-image.jpg"),
+ *     @OA\Property(property="file_path", type="string", example="item-attachments/1640995200_abc123.jpg"),
+ *     @OA\Property(property="mime_type", type="string", example="image/jpeg"),
+ *     @OA\Property(property="file_size", type="integer", example=1024000),
+ *     @OA\Property(property="file_type", type="string", example="image"),
+ *     @OA\Property(property="is_primary", type="boolean", example=true),
+ *     @OA\Property(property="created_at", type="string", format="date-time"),
+ *     @OA\Property(property="updated_at", type="string", format="date-time")
+ * )
+ * 
+ * @OA\Schema(
+ *     schema="Category",
+ *     type="object",
+ *     @OA\Property(property="id", type="integer", example=1),
+ *     @OA\Property(property="name", type="string", example="Electronics"),
+ *     @OA\Property(property="description", type="string", example="Electronic devices and components")
+ * )
+ */

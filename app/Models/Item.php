@@ -76,6 +76,38 @@ class Item extends Model
     }
 
     /**
+     * Get the attachments for this item.
+     */
+    public function attachments()
+    {
+        return $this->hasMany(ItemAttachment::class)->orderBy('is_primary', 'desc')->orderBy('created_at', 'desc');
+    }
+
+    /**
+     * Get the primary image for this item.
+     */
+    public function primaryImage()
+    {
+        return $this->hasOne(ItemAttachment::class)->where('is_primary', true)->where('file_type', 'image');
+    }
+
+    /**
+     * Get all images for this item.
+     */
+    public function images()
+    {
+        return $this->attachments()->where('file_type', 'image');
+    }
+
+    /**
+     * Get all documents for this item.
+     */
+    public function documents()
+    {
+        return $this->attachments()->where('file_type', '!=', 'image');
+    }
+
+    /**
      * Get a custom field by name.
      */
     public function getCustomField($fieldName)

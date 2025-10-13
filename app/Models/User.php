@@ -73,6 +73,22 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the primary company for this user.
+     */
+    public function company()
+    {
+        return $this->belongsToMany(Company::class, 'user_company')->wherePivot('is_primary', true);
+    }
+
+    /**
+     * Get the primary company for this user (single model).
+     */
+    public function primaryCompany()
+    {
+        return $this->companies()->wherePivot('is_primary', true)->first();
+    }
+
+    /**
      * Get the RFQs created by this user.
      */
     public function rfqs()

@@ -16,6 +16,9 @@ use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\EmailTemplateController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\NegotiationController;
+use App\Http\Controllers\Api\DeveloperController;
+use App\Http\Controllers\Api\ApiKeyController;
 use App\Http\Controllers\CurrencyController;
 
 /*
@@ -30,12 +33,12 @@ use App\Http\Controllers\CurrencyController;
 */
 
 // Public routes
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/verify-email', [AuthController::class, 'verifyEmail']);
-Route::post('/resend-verification', [AuthController::class, 'resendVerification']);
-Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
-Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1'); // 5 registrations per minute
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1'); // 10 login attempts per minute
+Route::post('/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:5,1'); // 5 verifications per minute
+Route::post('/resend-verification', [AuthController::class, 'resendVerification'])->middleware('throttle:3,1'); // 3 resends per minute
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:3,1'); // 3 password resets per minute
+Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1'); // 5 password resets per minute
 Route::post('/profile/verify-email-update', [UserController::class, 'verifyEmailUpdate']);
 Route::post('/check-status', [AuthController::class, 'checkStatus']);
 
@@ -46,6 +49,11 @@ Route::get('/rfqs/template/{type}', [RfqController::class, 'downloadTemplate']);
 Route::post('/supplier-register', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'registerFromInvitation']);
 Route::get('/supplier-invitation/validate', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'validateInvitation']);
 Route::post('/check-user-exists', [App\Http\Controllers\Api\SupplierRegistrationController::class, 'checkUserExists']);
+
+// Developer registration routes
+Route::post('/developer/register', [DeveloperController::class, 'register'])->middleware('throttle:3,1'); // 3 developer registrations per minute
+Route::post('/developer/verify-email', [DeveloperController::class, 'verifyEmail'])->middleware('throttle:5,1'); // 5 verifications per minute
+Route::post('/developer/resend-verification', [DeveloperController::class, 'resendVerification'])->middleware('throttle:2,1'); // 2 resends per minute
 
 // Public file downloads - outside protected routes
 Route::get('/downloads/{filename}', function ($filename) {
@@ -101,7 +109,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/profile', [AuthController::class, 'profile']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
-    Route::post('/change-password', [AuthController::class, 'changePassword']);
+    Route::post('/change-password', [AuthController::class, 'changePassword'])->middleware('throttle:5,1'); // 5 password changes per minute
 
     // Get users for invitations (Buyers and Admins)
     Route::get('/users/for-invitations', [UserController::class, 'getUsersForInvitations']);
@@ -109,7 +117,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // User profile routes (authenticated users)
     Route::get('/profile', [UserController::class, 'profile']);
     Route::put('/profile', [UserController::class, 'updateProfile']);
-    Route::post('/profile/request-email-update', [UserController::class, 'requestEmailUpdate']);
+    Route::post('/profile/request-email-update', [UserController::class, 'requestEmailUpdate'])->middleware('throttle:3,1'); // 3 email update requests per minute
     Route::get('/users/others', [UserController::class, 'getOtherUsers']);
     Route::get('/users/{id}/profile', [UserController::class, 'getUserProfile']);
 
@@ -159,6 +167,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/items/bulk-import', [ItemController::class, 'bulkImport']);
     Route::post('/items/bulk-export', [ItemController::class, 'bulkExport']);
     Route::get('/categories', [ItemController::class, 'categories']);
+    
+    // Item file attachments (with rate limiting)
+    Route::post('/items/{id}/attachments', [ItemController::class, 'uploadAttachment'])->middleware('throttle:10,1'); // 10 uploads per minute
+    Route::get('/items/{id}/attachments', [ItemController::class, 'getAttachments']);
+    Route::delete('/items/{itemId}/attachments/{attachmentId}', [ItemController::class, 'deleteAttachment'])->middleware('throttle:20,1'); // 20 deletions per minute
+    Route::put('/items/{itemId}/attachments/{attachmentId}/primary', [ItemController::class, 'setPrimaryAttachment'])->middleware('throttle:30,1'); // 30 updates per minute
+    
     Route::apiResource('items', ItemController::class);
     
         // Item template management - specific routes must come BEFORE apiResource
@@ -188,12 +203,32 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/bids/{bid}/award', [BidController::class, 'award']);
 
     // Purchase Order management
+    Route::get('/purchase-orders/export', [PurchaseOrderController::class, 'export']);
     Route::apiResource('purchase-orders', PurchaseOrderController::class);
     Route::post('/purchase-orders/{purchaseOrder}/approve', [PurchaseOrderController::class, 'approve']);
     Route::post('/purchase-orders/{purchaseOrder}/reject', [PurchaseOrderController::class, 'reject']);
     Route::post('/purchase-orders/{purchaseOrder}/send', [PurchaseOrderController::class, 'send']);
     Route::post('/purchase-orders/{purchaseOrder}/confirm', [PurchaseOrderController::class, 'confirm']);
     Route::post('/purchase-orders/{purchaseOrder}/confirm-delivery', [PurchaseOrderController::class, 'confirmDelivery']);
+    Route::post('/purchase-orders/create-from-negotiation/{negotiationId}', [PurchaseOrderController::class, 'createFromNegotiation']);
+    Route::get('/debug/negotiation/{id}', function($id) {
+        $negotiation = \App\Models\Negotiation::with(['messages'])->find($id);
+        $lastMessage = $negotiation->messages()->orderBy('created_at', 'desc')->first();
+        return response()->json([
+            'negotiation' => [
+                'id' => $negotiation->id,
+                'status' => $negotiation->status,
+                'closed_at' => $negotiation->closed_at,
+                'updated_at' => $negotiation->updated_at
+            ],
+            'last_message' => $lastMessage ? [
+                'id' => $lastMessage->id,
+                'message_type' => $lastMessage->message_type,
+                'offer_status' => $lastMessage->offer_status,
+                'created_at' => $lastMessage->created_at
+            ] : null
+        ]);
+    });
     
     // PO Modification routes
     Route::post('/purchase-orders/{purchaseOrder}/modify', [PurchaseOrderController::class, 'modify']);
@@ -208,7 +243,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/dashboard', [ReportsController::class, 'dashboard']);
     Route::get('/reports/rfq-analysis', [ReportsController::class, 'rfqAnalysis']);
     Route::get('/reports/supplier-performance', [ReportsController::class, 'supplierPerformance']);
-    Route::get('/reports/cost-savings', [ReportsController::class, 'costSavings']);
     Route::post('/reports/export', [ReportsController::class, 'export']);
 
     // Notifications
@@ -232,4 +266,49 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/currencies/rates', [CurrencyController::class, 'getExchangeRates']);
         Route::post('/currencies/rates', [CurrencyController::class, 'updateExchangeRates']);
     });
+
+    // Negotiation management
+    Route::get('/negotiations', [NegotiationController::class, 'index']);
+    Route::get('/negotiations/{id}', [NegotiationController::class, 'show']);
+    Route::post('/negotiations', [NegotiationController::class, 'store']);
+    Route::post('/negotiations/{id}/messages', [NegotiationController::class, 'sendMessage']);
+    Route::post('/negotiations/{id}/attachments', [NegotiationController::class, 'uploadAttachment'])->middleware('throttle:10,1'); // 10 uploads per minute
+    Route::post('/negotiations/{id}/close', [NegotiationController::class, 'close']);
+    Route::post('/negotiations/{id}/cancel', [NegotiationController::class, 'cancel']);
+    Route::delete('/negotiations/{id}', [NegotiationController::class, 'destroy']);
+    Route::get('/negotiations/stats/overview', [NegotiationController::class, 'getStats']);
+    
+    // Developer dashboard
+    Route::get('/developer/dashboard', [DeveloperController::class, 'dashboard']);
+    
+    // API Key management
+    Route::apiResource('api-keys', ApiKeyController::class);
+    Route::get('/api-keys/usage/statistics', [ApiKeyController::class, 'usage']);
+});
+
+// Public API routes (protected by API key authentication)
+Route::middleware(['api.key', 'api.usage'])->group(function () {
+    // RFQ endpoints
+    Route::get('/public/rfqs', [RfqController::class, 'index']);
+    Route::get('/public/rfqs/{id}', [RfqController::class, 'show']);
+    
+    // Bid endpoints
+    Route::get('/public/bids', [BidController::class, 'index']);
+    Route::get('/public/bids/{id}', [BidController::class, 'show']);
+    
+    // Purchase Order endpoints
+    Route::get('/public/purchase-orders', [PurchaseOrderController::class, 'index']);
+    Route::get('/public/purchase-orders/{id}', [PurchaseOrderController::class, 'show']);
+    
+    // Company endpoints
+    Route::get('/public/companies', [CompanyController::class, 'index']);
+    Route::get('/public/companies/{id}', [CompanyController::class, 'show']);
+    
+    // Category endpoints
+    Route::get('/public/categories', [CategoryController::class, 'index']);
+    Route::get('/public/categories/{id}', [CategoryController::class, 'show']);
+    
+    // Item endpoints
+    Route::get('/public/items', [ItemController::class, 'index']);
+    Route::get('/public/items/{id}', [ItemController::class, 'show']);
 });

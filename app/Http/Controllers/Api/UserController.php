@@ -442,17 +442,15 @@ class UserController extends Controller
                 ->first();
 
             if ($existingVerification) {
-                Log::info('Existing verification found', [
+                Log::info('Existing verification found - allowing resend', [
                     'verification_id' => $existingVerification->id,
                     'expires_at' => $existingVerification->expires_at
                 ]);
-                return response()->json([
-                    'success' => false,
-                    'message' => 'A verification email has already been sent to this address. Please check your inbox or wait before requesting another.'
-                ], 400);
+                // Delete the existing verification to allow resending
+                $existingVerification->delete();
             }
 
-            // Delete any old pending verifications for this user
+            // Delete any other old pending verifications for this user
             $deletedCount = EmailVerification::where('user_id', $user->id)
                 ->where('is_verified', false)
                 ->delete();

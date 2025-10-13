@@ -99,8 +99,8 @@ class AuthController extends Controller
             // Assign role
             $user->assignRole($request->role);
 
-            // Attach user to company
-            $user->companies()->attach($company->id);
+            // Attach user to company and set as primary
+            $user->companies()->attach($company->id, ['is_primary' => true, 'role' => 'owner']);
 
             // Generate email verification token
             $verificationToken = Str::random(64);
@@ -550,11 +550,27 @@ class AuthController extends Controller
      */
     private function sendVerificationEmail($user, $token)
     {
-        // For now, we'll just log the email. In production, you'd use a proper email service
-        Log::info("Verification email sent to {$user->email} with token: {$token}");
-        
-        // TODO: Implement actual email sending
-        // Mail::to($user->email)->send(new EmailVerificationMail($user, $token));
+        try {
+            $verificationUrl = config('app.frontend_url') . '/verify-email?token=' . $token;
+            
+            Log::info("Sending verification email to {$user->email}", [
+                'user_id' => $user->id,
+                'verification_url' => $verificationUrl
+            ]);
+            
+            // Send verification email
+            Mail::to($user->email)->send(new \App\Mail\EmailVerificationMail(
+                $user->name, 
+                $verificationUrl, 
+                null // null for signup verification
+            ));
+            
+            Log::info("Verification email sent successfully to {$user->email}");
+            
+        } catch (\Exception $e) {
+            Log::error("Failed to send verification email to {$user->email}: " . $e->getMessage());
+            // Don't throw exception to avoid breaking the registration flow
+        }
     }
 
     /**

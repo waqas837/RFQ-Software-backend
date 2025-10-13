@@ -34,7 +34,7 @@
         }
         .button {
             display: inline-block;
-            background: #007bff;
+            background: #6b7280;
             color: #ffffff;
             padding: 12px 30px;
             text-decoration: none;
@@ -42,7 +42,7 @@
             margin: 20px 0;
         }
         .button:hover {
-            background: #0056b3;
+            background: #4b5563;
         }
         .warning {
             background: #fff3cd;
@@ -62,9 +62,13 @@
     <div class="content">
         <p>Hello {{ $userName }},</p>
         
-        <p>You have requested to change your email address to <strong>{{ $newEmail }}</strong>.</p>
-        
-        <p>To complete this change, please click the button below to verify your new email address:</p>
+        @if($newEmail && $newEmail !== $userName)
+            <p>You have requested to change your email address to <strong>{{ $newEmail }}</strong>.</p>
+            <p>To complete this change, please click the button below to verify your new email address:</p>
+        @else
+            <p>Thank you for registering with our RFQ System!</p>
+            <p>To complete your registration, please click the button below to verify your email address:</p>
+        @endif
         
         <div style="text-align: center;">
             <a href="{{ $verificationUrl }}" class="button">Verify Email Address</a>
@@ -79,7 +83,11 @@
             {{ $verificationUrl }}
         </p>
         
-        <p>If you didn't request this email change, please ignore this email and your current email address will remain unchanged.</p>
+        @if($newEmail && $newEmail !== $userName)
+            <p>If you didn't request this email change, please ignore this email and your current email address will remain unchanged.</p>
+        @else
+            <p>If you didn't create an account with us, please ignore this email.</p>
+        @endif
         
         <p>Best regards,<br>RFQ System Team</p>
     </div>

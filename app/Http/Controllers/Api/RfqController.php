@@ -103,7 +103,7 @@ class RfqController extends Controller
             'budget_min' => 'nullable|numeric|min:0',
             'budget_max' => 'nullable|numeric|min:0|gte:budget_min',
             'delivery_deadline' => 'required|date|after:today',
-            'bidding_deadline' => 'required|date|before:delivery_deadline',
+            'bidding_deadline' => 'required|date|after_or_equal:today|before:delivery_deadline',
             'terms_conditions' => 'nullable|string',
             'items' => 'required|array|min:1',
             'items.*.item_id' => 'required|exists:items,id',
@@ -121,10 +121,38 @@ class RfqController extends Controller
         ]);
 
         if ($validator->fails()) {
+            $errors = $validator->errors();
+            
+            // Check for specific date errors
+            if ($errors->has('bidding_deadline')) {
+                if (str_contains($errors->first('bidding_deadline'), 'after_or_equal')) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Bidding deadline must be today or in the future.',
+                        'errors' => $errors
+                    ], 422);
+                }
+                if (str_contains($errors->first('bidding_deadline'), 'before')) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Bidding deadline must be before delivery deadline.',
+                        'errors' => $errors
+                    ], 422);
+                }
+            }
+            
+            if ($errors->has('delivery_deadline') && str_contains($errors->first('delivery_deadline'), 'after')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Delivery deadline must be in the future.',
+                    'errors' => $errors
+                ], 422);
+            }
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed. Please check all required fields including currency selection.',
-                'errors' => $validator->errors()
+                'errors' => $errors
             ], 422);
         }
 
@@ -226,6 +254,13 @@ class RfqController extends Controller
 
         // Send notifications to invited people
         $this->sendInvitationNotifications($rfq, $request->invited_user_ids ?? [], $request->invited_emails ?? [], $request->user()->id);
+
+        // Send notifications to all suppliers about new RFQ
+        try {
+            $this->notifyAllSuppliersAboutNewRfq($rfq);
+        } catch (\Exception $e) {
+            Log::error('Error sending RFQ notifications: ' . $e->getMessage());
+        }
 
         return response()->json([
             'success' => true,
@@ -438,30 +473,17 @@ class RfqController extends Controller
             ], 403);
         }
 
-        // Check if RFQ has bids
-        $bidCount = $rfq->bids()->count();
-        if ($bidCount > 0) {
-            return response()->json([
-                'success' => false,
-                'message' => "Cannot delete RFQ. It has {$bidCount} submitted bid(s). Please cancel the RFQ instead of deleting it."
-            ], 400);
-        }
-
-        // Check if RFQ has purchase orders
-        $poCount = $rfq->purchaseOrders()->count();
-        if ($poCount > 0) {
-            return response()->json([
-                'success' => false,
-                'message' => "Cannot delete RFQ. It has {$poCount} purchase order(s). Please cancel the RFQ instead of deleting it."
-            ], 400);
-        }
-
-        // Only allow deletion of RFQs in draft status with no bids or POs
+        // Allow deletion of draft RFQs or change published RFQs back to draft
         if ($rfq->status !== 'draft') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete RFQ. Only draft RFQs without bids or purchase orders can be deleted.'
-            ], 400);
+            // If RFQ is published, change it back to draft first
+            if ($rfq->status === 'published') {
+                $rfq->update(['status' => 'draft']);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cannot delete RFQ. Only draft and published RFQs can be deleted. Please cancel the RFQ instead.'
+                ], 400);
+            }
         }
 
         $rfq->delete();
@@ -539,7 +561,14 @@ class RfqController extends Controller
 
         $rfq->update(['status' => 'published']);
 
-        // Send email notifications to suppliers
+        // Send notifications to all suppliers about new RFQ
+        try {
+            $this->notifyAllSuppliersAboutNewRfq($rfq);
+        } catch (\Exception $e) {
+            Log::error('Error sending RFQ notifications: ' . $e->getMessage());
+        }
+
+        // Send email notifications to specific suppliers
         try {
             $suppliers = $rfq->suppliers;
             $buyer = $rfq->creator;
@@ -781,6 +810,52 @@ class RfqController extends Controller
 
         } catch (\Exception $e) {
             Log::error("Failed to send RFQ invitation notifications", [
+                'rfq_id' => $rfq->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * Notify all suppliers about new RFQ.
+     */
+    private function notifyAllSuppliersAboutNewRfq(Rfq $rfq)
+    {
+        try {
+            // Get all users with supplier role
+            $suppliers = \App\Models\User::whereHas('roles', function($query) {
+                $query->where('name', 'supplier');
+            })->get();
+
+            foreach ($suppliers as $supplier) {
+                // Create notification record
+                \App\Models\Notification::create([
+                    'user_id' => $supplier->id,
+                    'type' => 'rfq_published',
+                    'title' => 'New RFQ Available',
+                    'message' => "A new RFQ '{$rfq->title}' has been published and is available for bidding.",
+                    'data' => json_encode([
+                        'rfq_id' => $rfq->id,
+                        'rfq_title' => $rfq->title,
+                        'rfq_reference' => $rfq->reference_number,
+                        'bid_deadline' => $rfq->bid_deadline,
+                        'delivery_date' => $rfq->delivery_date,
+                        'budget_min' => $rfq->budget_min,
+                        'budget_max' => $rfq->budget_max,
+                        'currency' => $rfq->currency
+                    ]),
+                    'is_read' => false
+                ]);
+            }
+
+            Log::info("RFQ notifications sent to all suppliers", [
+                'rfq_id' => $rfq->id,
+                'rfq_title' => $rfq->title,
+                'suppliers_notified' => $suppliers->count()
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("Failed to send RFQ notifications to suppliers", [
                 'rfq_id' => $rfq->id,
                 'error' => $e->getMessage()
             ]);
