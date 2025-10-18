@@ -83,15 +83,10 @@
             @endif
         </div>
 
-        @if($user)
-            <p>To view the complete RFQ details and submit your quotation, please click the button below:</p>
-            <a href="{{ $rfqUrl }}" class="button">View RFQ Details</a>
-        @else
-            <p>To participate in this RFQ, click the button below. We'll check if you have an account and guide you accordingly:</p>
-            <a href="{{ $registrationUrl }}" class="button">Participate in RFQ</a>
-            
-            <p><strong>Note:</strong> If you don't have an account, you'll be guided through registration. If you do, you'll be asked to login. After that, you can immediately submit your bid.</p>
-        @endif
+        <p>To participate in this RFQ, click the button below. We'll check if you have an account and guide you accordingly:</p>
+        <a href="{{ $registrationUrl }}" class="button">Participate in RFQ</a>
+        
+        <p><strong>Note:</strong> If you don't have an account, you'll be guided through registration. If you do, you'll be asked to login. After that, you can immediately submit your bid.</p>
         
         <p>If you have any questions about this RFQ, please contact the RFQ creator directly.</p>
         

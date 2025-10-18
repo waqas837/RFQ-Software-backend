@@ -54,9 +54,8 @@ class NotificationService
         try {
             $user = $notification->user;
             
-            // For testing, send all emails to test email
-            $testEmail = env('TEST_EMAIL', 'waqaskhanbughlani1124@gmail.com');
-            Mail::to($testEmail)->send(new NotificationEmail($notification));
+            // Send email to the actual user
+            Mail::to($user->email)->send(new NotificationEmail($notification));
             
             $notification->markEmailAsSent();
         } catch (\Exception $e) {

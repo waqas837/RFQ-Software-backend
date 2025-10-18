@@ -207,4 +207,51 @@ class CurrencyController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Convert amount for negotiation counter offers
+     */
+    public function convertNegotiationAmount(Request $request): JsonResponse
+    {
+        try {
+            $request->validate([
+                'amount' => 'required|numeric|min:0',
+                'from_currency' => 'required|string|size:3',
+                'to_currency' => 'required|string|size:3',
+                'rfq_currency' => 'required|string|size:3'
+            ]);
+
+            $amount = $request->amount;
+            $fromCurrency = strtoupper($request->from_currency);
+            $toCurrency = strtoupper($request->to_currency);
+            $rfqCurrency = strtoupper($request->rfq_currency);
+
+            // Convert from counter offer currency to RFQ currency
+            $convertedToRfq = $this->currencyService->convert($amount, $fromCurrency, $rfqCurrency);
+            
+            // Convert from RFQ currency to target currency
+            $convertedAmount = $this->currencyService->convert($convertedToRfq, $rfqCurrency, $toCurrency);
+            
+            $formattedAmount = $this->currencyService->formatAmount($convertedAmount, $toCurrency);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'original_amount' => $amount,
+                    'original_currency' => $fromCurrency,
+                    'converted_amount' => $convertedAmount,
+                    'converted_currency' => $toCurrency,
+                    'formatted_amount' => $formattedAmount,
+                    'rfq_currency' => $rfqCurrency,
+                    'conversion_rate' => $this->currencyService->getRate($fromCurrency, $toCurrency)
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to convert negotiation amount',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

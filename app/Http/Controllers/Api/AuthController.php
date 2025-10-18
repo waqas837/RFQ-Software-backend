@@ -76,12 +76,12 @@ class AuthController extends Controller
                     'tax_id' => $request->company_tax_id,
                     'description' => $request->company_description,
                     'type' => $request->role,
-                    'status' => $request->role === 'supplier' ? 'pending_approval' : 'active',
+                    'status' => 'active',
                 ]
             );
 
-            // Determine user status based on role
-            $userStatus = $request->role === 'supplier' ? 'pending' : 'active';
+            // All users are active immediately after email verification
+            $userStatus = 'active';
 
             // Create user
             $user = User::create([
@@ -109,19 +109,14 @@ class AuthController extends Controller
             // Send email verification
             $this->sendVerificationEmail($user, $verificationToken);
 
-            // Send admin notification for supplier approval (if supplier)
-            if ($request->role === 'supplier') {
-                $this->sendAdminApprovalNotification($user, $company);
-            }
+            // No admin approval needed - users are active immediately
 
             return response()->json([
                 'success' => true,
-                'message' => $request->role === 'supplier' 
-                    ? 'Registration successful! Please check your email to verify your account. Your account will be activated after admin approval.'
-                    : 'Registration successful! Please check your email to verify your account.',
+                'message' => 'Registration successful! Please check your email to verify your account.',
                 'data' => [
                     'user' => $user->load('roles', 'companies'),
-                    'requires_approval' => $request->role === 'supplier',
+                    'requires_approval' => false,
                     'email_verification_required' => true,
                 ]
             ], 201);
@@ -247,7 +242,7 @@ class AuthController extends Controller
                 'email_verified' => !is_null($user->email_verified_at),
                 'status' => $user->status,
                 'role' => $user->role,
-                'requires_approval' => $user->role === 'supplier' && $user->status === 'pending',
+                'requires_approval' => false,
             ]
         ]);
     }
@@ -287,15 +282,11 @@ class AuthController extends Controller
         //     ], 401);
         // }
         
-        // Check if account is active
+        // Check if account is active (all users are active after email verification)
         if ($user->status !== 'active') {
-            $message = $user->status === 'pending' 
-                ? 'Your account is pending admin approval. You will be notified once approved.'
-                : 'Your account is not active.';
-                
             return response()->json([
                 'success' => false,
-                'message' => $message,
+                'message' => 'Your account is not active. Please contact support.',
                 'status' => $user->status,
             ], 401);
         }
@@ -582,7 +573,6 @@ class AuthController extends Controller
         Log::info("Admin approval required for supplier: {$user->email} from company: {$company->name}");
         
         // TODO: Implement actual admin notification
-        // Mail::to(admin@rfqsystem.com)->send(new SupplierApprovalRequest($user, $company));
     }
 
     /**

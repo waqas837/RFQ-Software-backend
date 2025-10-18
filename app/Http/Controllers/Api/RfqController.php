@@ -102,8 +102,8 @@ class RfqController extends Controller
             'currency' => 'required|string|size:3',
             'budget_min' => 'nullable|numeric|min:0',
             'budget_max' => 'nullable|numeric|min:0|gte:budget_min',
-            'delivery_deadline' => 'required|date|after:today',
-            'bidding_deadline' => 'required|date|after_or_equal:today|before:delivery_deadline',
+            'delivery_deadline' => 'required|date|after_or_equal:today',
+            'bidding_deadline' => 'required|date|after_or_equal:today|before_or_equal:delivery_deadline',
             'terms_conditions' => 'nullable|string',
             'items' => 'required|array|min:1',
             'items.*.item_id' => 'required|exists:items,id',
@@ -119,6 +119,29 @@ class RfqController extends Controller
             'attachments.*' => 'file|max:10240', // 10MB max per file
             'invited_user_ids.*' => 'exists:users,id',
         ]);
+
+        // Custom date validation - must be today or future
+        $today = now()->startOfDay();
+        $biddingDeadline = $request->bidding_deadline ? \Carbon\Carbon::parse($request->bidding_deadline)->startOfDay() : null;
+        
+        // Debug logging
+        \Log::info('Date validation debug:', [
+            'received_bidding_deadline' => $request->bidding_deadline,
+            'parsed_bidding_deadline' => $biddingDeadline ? $biddingDeadline->toDateString() : null,
+            'today_start_of_day' => $today->toDateString(),
+            'comparison_result' => $biddingDeadline ? ($biddingDeadline->lt($today) ? 'LESS_THAN' : 'GREATER_OR_EQUAL') : 'NULL'
+        ]);
+        
+        if ($biddingDeadline) {
+            // Check if bidding deadline is before today (not including today)
+            if ($biddingDeadline->lt($today)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Bidding deadline must be today or in the future.',
+                    'errors' => ['bidding_deadline' => ['The bidding deadline field must be a date after or equal to today.']]
+                ], 422);
+            }
+        }
 
         if ($validator->fails()) {
             $errors = $validator->errors();
@@ -214,7 +237,7 @@ class RfqController extends Controller
             'category_id' => $category->id,
             'company_id' => $request->user()->companies->first()->id,
             'created_by' => $request->user()->id,
-            'status' => 'bidding_open',
+            'status' => 'draft',
             'currency' => $request->currency,
             'budget_min' => $request->budget_min,
             'budget_max' => $request->budget_max,
@@ -241,11 +264,13 @@ class RfqController extends Controller
                 'specifications' => $item['specifications'] ?? null,
                 'custom_fields' => is_array($item['custom_fields']) ? $item['custom_fields'] : null,
                 'estimated_price' => null,
-                'currency' => 'USD',
+                'currency' => $request->currency,
                 'delivery_date' => null,
                 'sort_order' => 0,
             ]);
         }
+
+        // RFQ is created in DRAFT status - user must manually publish it later
 
         // Add suppliers if provided
         if ($request->supplier_ids) {
@@ -408,11 +433,11 @@ class RfqController extends Controller
             ], 403);
         }
 
-        // Only allow updates if RFQ is in draft status
-        if ($rfq->status !== 'draft') {
+        // Allow updates if RFQ is in draft, published, or bidding_open status
+        if (!in_array($rfq->status, ['draft', 'published', 'bidding_open'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Cannot update RFQ that is not in draft status'
+                'message' => 'Cannot update RFQ that is not in draft, published, or bidding open status'
             ], 400);
         }
 

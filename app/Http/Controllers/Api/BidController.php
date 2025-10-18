@@ -20,6 +20,9 @@ class BidController extends Controller
     public function index(Request $request)
     {
         try {
+            // Debug logging
+            \Log::info('Bids API called by user: ' . $request->user()->id . ' with role: ' . $request->user()->role);
+            
             $bids = Bid::with(['rfq', 'supplierCompany', 'supplier', 'items.rfqItem', 'submittedBy', 'purchaseOrder'])
                 ->when($request->rfq_id, function ($query, $rfqId) {
                     $query->where('rfq_id', $rfqId);
@@ -32,13 +35,24 @@ class BidController extends Controller
                 ->when($request->status, function ($query, $status) {
                     $query->where('status', $status);
                 })
-                ->when($request->user()->hasRole('supplier'), function ($query) use ($request) {
+                ->when($request->user()->role === 'supplier', function ($query) use ($request) {
                     $query->where('submitted_by', $request->user()->id);
                 })
-                ->when($request->user()->hasRole('buyer'), function ($query) use ($request) {
+                ->when($request->user()->role === 'buyer', function ($query) use ($request) {
+                    // Include RFQs created by the buyer OR belonging to the buyer's company/companies
+                    $buyerCompanyIds = $request->user()->companies()->pluck('companies.id');
+                    
+                    // First try: RFQs created by this user
                     $query->whereHas('rfq', function ($q) use ($request) {
                         $q->where('created_by', $request->user()->id);
                     });
+                    
+                    // If no company IDs, that's it. If there are company IDs, also include those
+                    if ($buyerCompanyIds->isNotEmpty()) {
+                        $query->orWhereHas('rfq', function ($q) use ($buyerCompanyIds) {
+                            $q->whereIn('company_id', $buyerCompanyIds);
+                        });
+                    }
                 })
                 ->when($request->sort_by, function ($query) use ($request) {
                     $direction = $request->sort_direction === 'desc' ? 'desc' : 'asc';
@@ -47,6 +61,8 @@ class BidController extends Controller
                     $query->orderBy('created_at', 'desc');
                 })
                 ->paginate($request->per_page ?? 15);
+
+            \Log::info('Bids found: ' . $bids->count());
 
             return response()->json([
                 'success' => true,
@@ -221,7 +237,7 @@ class BidController extends Controller
                 'unit_of_measure' => $originalItem->unit_of_measure ?? 'pcs',
                 'unit_price' => $item['unit_price'],
                 'total_price' => $item['total_price'],
-                'currency' => 'USD',
+                'currency' => $request->currency,
                 'technical_specifications' => is_array($item['specifications']) ? json_encode($item['specifications']) : $item['specifications'],
                 'is_available' => true,
             ]);
@@ -293,7 +309,7 @@ class BidController extends Controller
                     'unit_of_measure' => $originalItem->unit_of_measure ?? 'pcs',
                     'unit_price' => $item['unit_price'],
                     'total_price' => $item['total_price'],
-                    'currency' => 'USD',
+                    'currency' => $bid->currency,
                     'technical_specifications' => is_array($item['specifications']) ? json_encode($item['specifications']) : $item['specifications'],
                     'is_available' => true,
                 ]);

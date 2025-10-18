@@ -230,6 +230,48 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     });
     
+    // Debug PO visibility for suppliers
+    Route::get('/debug/po-visibility', function(Request $request) {
+        $user = $request->user();
+        $supplierCompany = $user->companies->first();
+        
+        // Get all POs
+        $allPOs = \App\Models\PurchaseOrder::with(['supplierCompany', 'buyerCompany'])->get();
+        
+        // Get POs filtered for this supplier
+        $filteredPOs = \App\Models\PurchaseOrder::with(['supplierCompany', 'buyerCompany'])
+            ->when($supplierCompany, function ($query) use ($supplierCompany) {
+                $query->where('supplier_company_id', $supplierCompany->id);
+            })
+            ->get();
+            
+        return response()->json([
+            'user_id' => $user->id,
+            'user_role' => $user->role,
+            'supplier_company_id' => $supplierCompany ? $supplierCompany->id : 'none',
+            'all_pos_count' => $allPOs->count(),
+            'filtered_pos_count' => $filteredPOs->count(),
+            'all_pos' => $allPOs->map(function($po) {
+                return [
+                    'id' => $po->id,
+                    'po_number' => $po->po_number,
+                    'supplier_company_id' => $po->supplier_company_id,
+                    'buyer_company_id' => $po->buyer_company_id,
+                    'status' => $po->status
+                ];
+            }),
+            'filtered_pos' => $filteredPOs->map(function($po) {
+                return [
+                    'id' => $po->id,
+                    'po_number' => $po->po_number,
+                    'supplier_company_id' => $po->supplier_company_id,
+                    'buyer_company_id' => $po->buyer_company_id,
+                    'status' => $po->status
+                ];
+            })
+        ]);
+    });
+    
     // PO Modification routes
     Route::post('/purchase-orders/{purchaseOrder}/modify', [PurchaseOrderController::class, 'modify']);
     Route::post('/purchase-orders/{purchaseOrder}/modifications/{modification}/approve', [PurchaseOrderController::class, 'approveModification']);
@@ -260,6 +302,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/currencies/conversion-data', [CurrencyController::class, 'getConversionData']);
     Route::post('/currencies/convert', [CurrencyController::class, 'convertAmount']);
     Route::get('/currencies/symbols', [CurrencyController::class, 'getCurrencySymbols']);
+    Route::post('/currencies/convert-negotiation', [CurrencyController::class, 'convertNegotiationAmount']);
     
     // Currency management (Admin only)
     Route::middleware('role:admin')->group(function () {
