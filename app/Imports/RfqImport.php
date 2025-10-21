@@ -19,6 +19,7 @@ class RfqImport
     protected $company;
     protected $importedCount = 0;
     protected $errors = [];
+    protected $sequenceNumber = 0;
 
     public function __construct($user, $company)
     {
@@ -80,8 +81,10 @@ class RfqImport
             throw new \Exception('CSV file appears to be empty.');
         }
 
-        // Convert headers to lowercase for consistency
-        $headers = array_map('strtolower', array_map('trim', $headers));
+        // Convert headers to lowercase and replace spaces with underscores
+        $headers = array_map(function($header) {
+            return str_replace(' ', '_', strtolower(trim($header)));
+        }, $headers);
 
         // Read data rows
         while (($row = fgetcsv($handle)) !== false) {
@@ -111,8 +114,10 @@ class RfqImport
                 throw new \Exception('Excel file appears to be empty');
             }
             
-            // Get headers from first row
-            $headers = array_map('strtolower', array_map('trim', $rows[0]));
+            // Get headers from first row and normalize them
+            $headers = array_map(function($header) {
+                return str_replace(' ', '_', strtolower(trim($header)));
+            }, $rows[0]);
             
             // Convert remaining rows to associative arrays
             for ($i = 1; $i < count($rows); $i++) {
@@ -150,38 +155,76 @@ class RfqImport
             throw new \Exception(implode(', ', $validator->errors()->all()));
         }
 
-        // Find or create category
-        $category = null;
+        // Resolve category - support both name and id based columns
+        $categoryId = null;
+        // Case 1: category name provided
         if (!empty($row['category'])) {
             $category = Category::firstOrCreate(
                 ['name' => $row['category']],
                 ['description' => 'Imported category', 'is_active' => true]
             );
+            $categoryId = $category->id;
+        }
+        // Case 2: category id provided (either `category_id` or `category id`)
+        if (!$categoryId && !empty($row['category_id'])) {
+            $existing = Category::find((int)$row['category_id']);
+            if ($existing) {
+                $categoryId = $existing->id;
+            }
+        }
+        if (!$categoryId && !empty($row['category id'])) {
+            $existing = Category::find((int)$row['category id']);
+            if ($existing) {
+                $categoryId = $existing->id;
+            }
+        }
+        // Fallback: ensure a default category exists to satisfy NOT NULL constraint
+        if (!$categoryId) {
+            $defaultCategory = Category::firstOrCreate(
+                ['name' => 'Uncategorized'],
+                ['description' => 'Default category for imports', 'is_active' => true]
+            );
+            $categoryId = $defaultCategory->id;
         }
 
         // Generate unique reference number
         $year = date('Y');
-        $lastRfq = Rfq::whereYear('created_at', $year)
-            ->orderBy('created_at', 'desc')
-            ->first();
         
-        $sequenceNumber = $lastRfq ? 
-            (int)substr($lastRfq->reference_number, -4) + 1 : 1;
+        // Initialize sequence number only once for the entire import batch
+        if ($this->sequenceNumber === 0) {
+            $lastRfq = Rfq::whereYear('created_at', $year)
+                ->orderBy('created_at', 'desc')
+                ->first();
+            
+            $this->sequenceNumber = $lastRfq ? 
+                (int)substr($lastRfq->reference_number, -4) + 1 : 1;
+        }
         
-        $referenceNumber = 'RFQ-' . $year . '-' . str_pad($sequenceNumber, 4, '0', STR_PAD_LEFT);
+        // Ensure reference number is unique
+        do {
+            $referenceNumber = 'RFQ-' . $year . '-' . str_pad($this->sequenceNumber, 4, '0', STR_PAD_LEFT);
+            $exists = Rfq::where('reference_number', $referenceNumber)->exists();
+            if ($exists) {
+                $this->sequenceNumber++;
+            }
+        } while ($exists);
+        
+        // Increment for next RFQ in the batch
+        $this->sequenceNumber++;
 
         // Create RFQ
         $rfq = Rfq::create([
             'title' => $row['title'],
             'description' => $row['description'] ?? '',
-            'category_id' => $category?->id,
+            'category_id' => $categoryId,
             'company_id' => $this->company->id,
             'created_by' => $this->user->id,
             'currency' => $row['currency'] ?? 'USD',
             'budget_min' => $row['budget_min'] ?? 0,
             'budget_max' => $row['budget_max'] ?? 0,
-            'delivery_date' => $this->parseDate($row['delivery_date']),
-            'bid_deadline' => $this->parseDate($row['bid_deadline']),
+            // Use null-coalescing to avoid undefined index notices when optional columns are missing
+            'delivery_date' => $this->parseDate($row['delivery_date'] ?? null),
+            'bid_deadline' => $this->parseDate($row['bid_deadline'] ?? null),
             'terms_conditions' => $row['terms_conditions'] ?? '',
             'status' => 'draft',
             'reference_number' => $referenceNumber,
@@ -196,18 +239,44 @@ class RfqImport
 
     private function createRfqItems($rfq, $row)
     {
-        $itemCount = 1;
         $hasItems = false;
+        
+        // Debug: Log the row data to see what we're receiving
+        \Log::info('Creating RFQ items', [
+            'row_keys' => array_keys($row),
+            'item_name' => $row['item_name'] ?? 'NOT SET',
+            'row_data' => $row
+        ]);
 
+        // Check for single item format (item_name, item_description, etc.)
+        if (isset($row['item_name']) && !empty($row['item_name'])) {
+            $hasItems = true;
+            
+            $itemData = [
+                'rfq_id' => $rfq->id,
+                'item_name' => $row['item_name'],
+                'item_description' => $row['item_description'] ?? '',
+                'quantity' => (int)($row['quantity'] ?? 1),
+                'unit_of_measure' => $row['unit_of_measure'] ?? 'pcs',
+                'specifications' => $row['specifications'] ?? '',
+                'notes' => $row['notes'] ?? '',
+                'currency' => $rfq->currency,
+            ];
+
+            RfqItem::create($itemData);
+        }
+
+        // Check for multiple items format (item_1_name, item_2_name, etc.)
+        $itemCount = 1;
         while (isset($row["item_{$itemCount}_name"]) && !empty($row["item_{$itemCount}_name"])) {
             $hasItems = true;
             
             $itemData = [
                 'rfq_id' => $rfq->id,
-                'name' => $row["item_{$itemCount}_name"],
-                'description' => $row["item_{$itemCount}_description"] ?? '',
+                'item_name' => $row["item_{$itemCount}_name"],
+                'item_description' => $row["item_{$itemCount}_description"] ?? '',
                 'quantity' => (int)($row["item_{$itemCount}_quantity"] ?? 1),
-                'unit' => $row["item_{$itemCount}_unit"] ?? 'pcs',
+                'unit_of_measure' => $row["item_{$itemCount}_unit"] ?? 'pcs',
                 'specifications' => $row["item_{$itemCount}_specifications"] ?? '',
                 'notes' => $row["item_{$itemCount}_notes"] ?? '',
                 'currency' => $rfq->currency,

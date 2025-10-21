@@ -916,7 +916,10 @@ class RfqController extends Controller
                 'Content-Type' => $type === 'xlsx' 
                     ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     : 'text/csv',
-                'Content-Disposition' => "attachment; filename=\"{$filename}\""
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache',
+                'Expires' => '0'
             ]);
 
         } catch (\Exception $e) {
