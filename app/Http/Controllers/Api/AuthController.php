@@ -269,13 +269,23 @@ class AuthController extends Controller
             ], 422);
         }
 
-        if (!Auth::attempt($request->only('email', 'password'))) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
-            ]);
+        // Check if user exists first
+        $user = User::where('email', $request->email)->first();
+        
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No account found with this email address.',
+            ], 401);
         }
 
-        $user = User::where('email', $request->email)->firstOrFail();
+        // Try to authenticate
+        if (!Auth::attempt($request->only('email', 'password'))) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The password you entered is incorrect.',
+            ], 401);
+        }
         
         // Check if email is verified
         if (!$user->email_verified_at) {
