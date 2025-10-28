@@ -171,11 +171,14 @@ class AuthController extends Controller
      */
     public function resendVerification(Request $request)
     {
+        Log::info('Resend verification request received', ['email' => $request->email]);
+        
         $validator = Validator::make($request->all(), [
             'email' => 'required|email',
         ]);
 
         if ($validator->fails()) {
+            Log::warning('Resend verification validation failed', ['errors' => $validator->errors()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid email',
@@ -185,6 +188,7 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (!$user) {
+            Log::warning('Resend verification: User not found', ['email' => $request->email]);
             return response()->json([
                 'success' => false,
                 'message' => 'User not found',
@@ -192,6 +196,7 @@ class AuthController extends Controller
         }
 
         if ($user->email_verified_at) {
+            Log::info('Resend verification: Email already verified', ['email' => $request->email]);
             return response()->json([
                 'success' => false,
                 'message' => 'Email already verified',
@@ -202,8 +207,12 @@ class AuthController extends Controller
         $verificationToken = Str::random(64);
         $user->update(['email_verification_token' => $verificationToken]);
 
+        Log::info('Sending resend verification email', ['email' => $request->email, 'user_id' => $user->id]);
+
         // Send verification email
         $this->sendVerificationEmail($user, $verificationToken);
+
+        Log::info('Resend verification email sent successfully', ['email' => $request->email]);
 
         return response()->json([
             'success' => true,
@@ -268,14 +277,14 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->firstOrFail();
         
-        // Check if email is verified - DISABLED FOR DEVELOPMENT
-        // if (!$user->email_verified_at) {
-        //     return response()->json([
-        //         'success' => false,
-        //         'message' => 'Please verify your email address before logging in.',
-        //         'email_verification_required' => true,
-        //     ], 401);
-        // }
+        // Check if email is verified
+        if (!$user->email_verified_at) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please verify your email address before logging in.',
+                'email_verification_required' => true,
+            ], 401);
+        }
         
         // Check if account is active (all users are active after email verification)
         if ($user->status !== 'active') {

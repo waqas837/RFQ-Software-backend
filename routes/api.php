@@ -36,7 +36,7 @@ use App\Http\Controllers\CurrencyController;
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1'); // 5 registrations per minute
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1'); // 10 login attempts per minute
 Route::post('/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:5,1'); // 5 verifications per minute
-Route::post('/resend-verification', [AuthController::class, 'resendVerification'])->middleware('throttle:3,1'); // 3 resends per minute
+Route::post('/resend-verification', [AuthController::class, 'resendVerification'])->middleware('throttle:10,1'); // 10 resends per minute
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:3,1'); // 3 password resets per minute
 Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1'); // 5 password resets per minute
 Route::post('/profile/verify-email-update', [UserController::class, 'verifyEmailUpdate']);
