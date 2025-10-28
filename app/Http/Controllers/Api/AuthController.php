@@ -229,21 +229,16 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'User not found',
-            ], 404);
-        }
-
         return response()->json([
-            'success' => true,
-            'data' => [
+            'success' => true, // API call successful
+            'email_exists' => (bool)$user, // True if email exists, false if available
+            'message' => $user ? 'Email is already registered.' : 'Email is available for registration.',
+            'data' => $user ? [
                 'email_verified' => !is_null($user->email_verified_at),
                 'status' => $user->status,
                 'role' => $user->role,
                 'requires_approval' => false,
-            ]
+            ] : null
         ]);
     }
 
