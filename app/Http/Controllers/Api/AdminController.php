@@ -82,7 +82,7 @@ class AdminController extends Controller
             // Send approval notification email
             $this->sendApprovalNotification($user, $request->notes);
 
-            Log::info("Supplier approved: {$user->email} by admin ID: " . auth()->id());
+            Log::info("Supplier approved", ['email' => $user->email, 'admin_id' => auth()->id()]);
 
             return response()->json([
                 'success' => true,
@@ -144,7 +144,7 @@ class AdminController extends Controller
             // Send rejection notification email
             $this->sendRejectionNotification($user, $request->reason);
 
-            Log::info("Supplier rejected: {$user->email} by admin ID: " . auth()->id() . " Reason: " . $request->reason);
+            Log::info("Supplier rejected", ['email' => $user->email, 'admin_id' => auth()->id(), 'reason' => $request->reason]);
 
             return response()->json([
                 'success' => true,
@@ -251,7 +251,7 @@ class AdminController extends Controller
 
             $user->update(['status' => $request->status]);
 
-            Log::info("User status updated: {$user->email} to {$request->status} by admin ID: " . $request->user()->id);
+            Log::info("User status updated", ['email' => $user->email, 'status' => $request->status, 'admin_id' => $request->user()->id]);
 
             return response()->json([
                 'success' => true,
@@ -274,7 +274,7 @@ class AdminController extends Controller
     private function sendApprovalNotification($user, $notes = null)
     {
         // For now, we'll just log the notification. In production, you'd send an email
-        Log::info("Approval notification sent to {$user->email}. Notes: " . ($notes ?? 'None'));
+        Log::info("Approval notification sent", ['email' => $user->email, 'notes' => $notes ?? 'None']);
         
         // TODO: Implement actual email sending
         // Mail::to($user->email)->send(new SupplierApprovedMail($user, $notes));
@@ -286,7 +286,7 @@ class AdminController extends Controller
     private function sendRejectionNotification($user, $reason)
     {
         // For now, we'll just log the notification. In production, you'd send an email
-        Log::info("Rejection notification sent to {$user->email}. Reason: {$reason}");
+        Log::info("Rejection notification sent", ['email' => $user->email, 'reason' => $reason]);
         
         // TODO: Implement actual email sending
         // Mail::to($user->email)->send(new SupplierRejectedMail($user, $reason));

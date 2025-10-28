@@ -28,10 +28,6 @@ class PurchaseOrderController extends Controller
     public function index(Request $request)
     {
         try {
-            // Debug logging
-            Log::info('PO Controller - User ID: ' . $request->user()->id);
-            Log::info('PO Controller - User Role: ' . $request->user()->role);
-            Log::info('PO Controller - User Company ID: ' . $request->user()->company_id);
             
             $purchaseOrders = PurchaseOrder::with(['rfq', 'supplierCompany', 'buyerCompany', 'creator'])
                 ->when($request->search, function ($query, $search) {
@@ -46,15 +42,8 @@ class PurchaseOrderController extends Controller
                 ->when($request->user()->role === 'supplier', function ($query) use ($request) {
                     $user = $request->user();
                     $supplierCompany = $user->companies->first();
-                    Log::info('PO Controller - Supplier user details:', [
-                        'user_id' => $user->id,
-                        'user_role' => $user->role,
-                        'companies_count' => $user->companies->count(),
-                        'company_id' => $supplierCompany ? $supplierCompany->id : 'none'
-                    ]);
                     if ($supplierCompany) {
                         $query->where('supplier_company_id', $supplierCompany->id);
-                        Log::info('PO Controller - Supplier filtering by company_id: ' . $supplierCompany->id);
                     } else {
                         Log::warning('PO Controller - Supplier has no company association');
                         // If no company, show POs where user is the supplier
@@ -68,9 +57,7 @@ class PurchaseOrderController extends Controller
                     $buyerCompany = $user->companies->first();
                     if ($buyerCompany) {
                         $query->where('buyer_company_id', $buyerCompany->id);
-                        Log::info('PO Controller - Buyer filtering by company_id: ' . $buyerCompany->id);
                     } else {
-                        Log::info('PO Controller - No company_id, filtering by created_by: ' . $user->id);
                         // If no company_id, show POs created by this user
                         $query->where('created_by', $user->id);
                     }
@@ -82,9 +69,6 @@ class PurchaseOrderController extends Controller
                     $query->orderBy('created_at', 'desc');
                 });
                 
-            // Debug: Log the SQL query
-            Log::info('PO Controller - SQL Query: ' . $purchaseOrders->toSql());
-            Log::info('PO Controller - Query Bindings: ' . json_encode($purchaseOrders->getBindings()));
             
             $purchaseOrders = $purchaseOrders->paginate($request->per_page ?? 15);
 
@@ -174,12 +158,6 @@ class PurchaseOrderController extends Controller
             $dateFrom = $request->get('date_from');
             $dateTo = $request->get('date_to');
 
-            // Debug logging
-            \Log::info('PO Export Debug - User:', [
-                'user_id' => $user->id,
-                'user_role' => $user->role,
-                'company_id' => $user->company_id
-            ]);
 
             // Build query based on user role and filters
             $query = PurchaseOrder::with(['rfq', 'supplierCompany', 'buyerCompany', 'creator', 'items']);
@@ -206,21 +184,9 @@ class PurchaseOrderController extends Controller
 
             $purchaseOrders = $query->orderBy('created_at', 'desc')->get();
 
-            // Debug logging
-            \Log::info('PO Export Debug - Query Results:', [
-                'total_purchase_orders' => $purchaseOrders->count(),
-                'first_po' => $purchaseOrders->first() ? [
-                    'id' => $purchaseOrders->first()->id,
-                    'po_number' => $purchaseOrders->first()->po_number,
-                    'status' => $purchaseOrders->first()->status,
-                    'supplier_company_id' => $purchaseOrders->first()->supplier_company_id,
-                    'buyer_company_id' => $purchaseOrders->first()->buyer_company_id
-                ] : null
-            ]);
 
             // If no purchase orders found, create a sample record for demonstration
             if ($purchaseOrders->isEmpty()) {
-                \Log::info('PO Export Debug - No purchase orders found, creating sample data');
                 
                 // Create a sample purchase order for demonstration
                 $samplePO = new PurchaseOrder([
@@ -1119,19 +1085,9 @@ class PurchaseOrderController extends Controller
             $negotiation = \App\Models\Negotiation::with(['bid', 'rfq', 'supplier'])->findOrFail($negotiationId);
             $negotiation = $negotiation->fresh(); // Force refresh from database
             
-            // Debug logging
-            \Log::info('PO Creation Debug:', [
-                'negotiation_id' => $negotiation->id,
-                'negotiation_status' => $negotiation->status,
-                'negotiation_closed_at' => $negotiation->closed_at,
-                'negotiation_updated_at' => $negotiation->updated_at
-            ]);
             
             // Check if negotiation is closed and offer was accepted
             if ($negotiation->status !== 'closed') {
-                \Log::info('PO Creation Failed: Negotiation not closed', [
-                    'current_status' => $negotiation->status
-                ]);
                 return response()->json([
                     'success' => false,
                     'message' => 'Purchase order can only be created from closed negotiations with accepted offers'
@@ -1145,19 +1101,9 @@ class PurchaseOrderController extends Controller
                 ->first();
             
             $lastMessage = $negotiation->messages()->orderBy('created_at', 'desc')->first();
-            \Log::info('PO Creation Debug - Last Message:', [
-                'message_id' => $lastMessage ? $lastMessage->id : 'none',
-                'message_type' => $lastMessage ? $lastMessage->message_type : 'none',
-                'offer_status' => $lastMessage ? $lastMessage->offer_status : 'none'
-            ]);
             
-            \Log::info('PO Creation Debug - Accepted Offer:', [
-                'accepted_offer_id' => $acceptedOffer ? $acceptedOffer->id : 'none',
-                'accepted_offer_status' => $acceptedOffer ? $acceptedOffer->offer_status : 'none'
-            ]);
             
             if (!$acceptedOffer) {
-                \Log::info('PO Creation Failed: No accepted counter offer found');
                 return response()->json([
                     'success' => false,
                     'message' => 'Purchase order can only be created when the offer has been accepted'

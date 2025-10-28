@@ -124,13 +124,6 @@ class RfqController extends Controller
         $today = now()->startOfDay();
         $biddingDeadline = $request->bidding_deadline ? \Carbon\Carbon::parse($request->bidding_deadline)->startOfDay() : null;
         
-        // Debug logging
-        \Log::info('Date validation debug:', [
-            'received_bidding_deadline' => $request->bidding_deadline,
-            'parsed_bidding_deadline' => $biddingDeadline ? $biddingDeadline->toDateString() : null,
-            'today_start_of_day' => $today->toDateString(),
-            'comparison_result' => $biddingDeadline ? ($biddingDeadline->lt($today) ? 'LESS_THAN' : 'GREATER_OR_EQUAL') : 'NULL'
-        ]);
         
         if ($biddingDeadline) {
             // Check if bidding deadline is before today (not including today)

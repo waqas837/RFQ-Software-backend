@@ -20,8 +20,6 @@ class BidController extends Controller
     public function index(Request $request)
     {
         try {
-            // Debug logging
-            \Log::info('Bids API called by user: ' . $request->user()->id . ' with role: ' . $request->user()->role);
             
             $bids = Bid::with(['rfq', 'supplierCompany', 'supplier', 'items.rfqItem', 'submittedBy', 'purchaseOrder'])
                 ->when($request->rfq_id, function ($query, $rfqId) {
@@ -62,8 +60,6 @@ class BidController extends Controller
                 })
                 ->paginate($request->per_page ?? 15);
 
-            \Log::info('Bids found: ' . $bids->count());
-
             return response()->json([
                 'success' => true,
                 'data' => $bids,
@@ -97,7 +93,6 @@ class BidController extends Controller
     public function store(Request $request)
     {
         // Debug: Log the request data
-        Log::info('Bid submission request:', $request->all());
         
         $validator = Validator::make($request->all(), [
             'rfq_id' => 'required|exists:rfqs,id',
@@ -114,15 +109,6 @@ class BidController extends Controller
         ]);
 
         if ($validator->fails()) {
-            // Debug: Log validation errors
-            Log::info('Validation failed:', $validator->errors()->toArray());
-            
-            // Debug: Check if RFQ items exist
-            foreach ($request->items as $item) {
-                $rfqItem = \App\Models\RfqItem::find($item['item_id']);
-                Log::info("RFQ Item {$item['item_id']} exists:", $rfqItem ? 'YES' : 'NO');
-            }
-            
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
@@ -368,24 +354,12 @@ class BidController extends Controller
             'submitted_at' => now()
         ]);
 
-        // Debug: Log bid submission
-        Log::info('Bid submitted successfully', [
-            'bid_id' => $bid->id,
-            'new_status' => $bid->status,
-            'submitted_at' => $bid->submitted_at
-        ]);
 
         // Create notification for buyer
         try {
             $rfq = $bid->rfq;
             $buyer = $rfq->creator;
             
-            Log::info('Creating bid notification', [
-                'rfq_id' => $rfq->id,
-                'buyer_id' => $buyer->id,
-                'supplier_id' => $bid->supplier->id,
-                'bid_id' => $bid->id
-            ]);
             
             app(\App\Services\NotificationService::class)->createNotification(
                 'bid_submitted',
@@ -399,7 +373,6 @@ class BidController extends Controller
                 true
             );
             
-            Log::info('Bid notification created successfully');
         } catch (\Exception $e) {
             Log::error('Error creating bid notification: ' . $e->getMessage());
             Log::error('Stack trace: ' . $e->getTraceAsString());
@@ -469,12 +442,6 @@ class BidController extends Controller
     {
         $bid = Bid::findOrFail($id);
 
-        // Debug: Log bid status
-        Log::info('Attempting to award bid', [
-            'bid_id' => $bid->id,
-            'current_status' => $bid->status,
-            'submitted_at' => $bid->submitted_at
-        ]);
 
         if ($bid->status === 'awarded') {
             return response()->json([
@@ -563,7 +530,6 @@ class BidController extends Controller
     {
         // Check if PO already exists for this bid
         if (PurchaseOrder::where('bid_id', $bid->id)->exists()) {
-            Log::info("PO already exists for bid {$bid->id}");
             return;
         }
 
@@ -599,14 +565,6 @@ class BidController extends Controller
             'sent_at' => now(),
         ]);
 
-        // Debug: Log PO creation details
-        Log::info('Auto-PO created successfully', [
-            'po_id' => $purchaseOrder->id,
-            'po_number' => $purchaseOrder->po_number,
-            'supplier_company_id' => $purchaseOrder->supplier_company_id,
-            'buyer_company_id' => $purchaseOrder->buyer_company_id,
-            'status' => $purchaseOrder->status
-        ]);
 
         // Copy items from bid to PO
         foreach ($bid->items as $bidItem) {
@@ -633,11 +591,6 @@ class BidController extends Controller
         // Create notification for supplier
         try {
             $supplierUser = $purchaseOrder->supplierCompany->users->first();
-            Log::info('PO Notification - Supplier details:', [
-                'supplier_company_id' => $purchaseOrder->supplier_company_id,
-                'supplier_user_id' => $supplierUser ? $supplierUser->id : 'none',
-                'supplier_user_email' => $supplierUser ? $supplierUser->email : 'none'
-            ]);
             
             if ($supplierUser) {
                 $notificationService = new NotificationService();
@@ -652,7 +605,6 @@ class BidController extends Controller
                     null,
                     true
                 );
-                Log::info('PO notification created for supplier user: ' . $supplierUser->id);
             } else {
                 Log::warning('No supplier user found for company: ' . $purchaseOrder->supplier_company_id);
             }
@@ -660,7 +612,6 @@ class BidController extends Controller
             Log::error('Error creating PO notification: ' . $e->getMessage());
         }
 
-        Log::info("Auto-generated PO {$poNumber} for bid {$bid->id}");
     }
 
     /**

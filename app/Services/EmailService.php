@@ -18,11 +18,6 @@ class EmailService
     public static function sendTemplateEmail($templateSlug, $to, $data = [], $options = [])
     {
         try {
-            Log::info("Attempting to send template email", [
-                'template_slug' => $templateSlug,
-                'to' => $to,
-                'data' => $data
-            ]);
             
             // Get the template
             $template = EmailTemplate::getLatestBySlug($templateSlug);
@@ -32,20 +27,10 @@ class EmailService
                 return false;
             }
 
-            Log::info("Found email template", [
-                'template_id' => $template->id,
-                'template_name' => $template->name,
-                'subject' => $template->subject,
-                'content_length' => strlen($template->content)
-            ]);
 
             // Replace placeholders
             $emailContent = $template->replacePlaceholders($data);
             
-            Log::info("Processed template placeholders", [
-                'processed_subject' => $emailContent['subject'],
-                'processed_content_length' => strlen($emailContent['content'])
-            ]);
             
             // Send email
             return self::sendEmail($to, $emailContent['subject'], $emailContent['content'], $options);
@@ -140,10 +125,6 @@ class EmailService
                 ));
             }
 
-            Log::info('RFQ cancellation emails sent successfully', [
-                'rfq_id' => $rfq->id,
-                'suppliers_count' => $suppliers->count()
-            ]);
 
             return true;
         } catch (\Exception $e) {
@@ -177,13 +158,11 @@ class EmailService
                 try {
                     Mail::to($supplier->email)->send(new RfqInvitation($rfq, $supplier, $buyer, $supplierData));
                     $successCount++;
-                    Log::info("RFQ invitation sent to: {$supplier->email}");
                 } catch (\Exception $e) {
                     Log::error("Failed to send RFQ invitation to {$supplier->email}: " . $e->getMessage());
                 }
             }
 
-            Log::info("RFQ invitations sent: {$successCount} out of " . count($suppliers));
             return $successCount;
             
         } catch (\Exception $e) {
@@ -209,7 +188,6 @@ class EmailService
 
             // Use dedicated mailable for bid confirmations
             Mail::to($supplier->email)->send(new BidConfirmation($bid, $supplier, $rfq, $data));
-            Log::info("Bid confirmation sent to: {$supplier->email}");
             
             return true;
             
@@ -267,7 +245,6 @@ class EmailService
                 }
             }
 
-            Log::info("Deadline reminders sent: {$successCount} out of " . count($suppliers));
             return $successCount;
             
         } catch (\Exception $e) {
@@ -352,21 +329,10 @@ class EmailService
     private static function sendEmail($to, $subject, $content, $options = [])
     {
         try {
-            // Log the mailer configuration being used
-            Log::info("Attempting to send email using Gmail mailer", [
-                'to' => $to,
-                'subject' => $subject,
-                'mailer' => config('mail.default'),
-                'gmail_config' => config('mail.mailers.gmail')
-            ]);
             
             // Use Laravel Mail to send the email with Gmail configuration
             Mail::mailer('gmail')->to($to)->send(new \App\Mail\GenericEmail($subject, $content, $options));
             
-            Log::info("Email sent successfully to {$to}:", [
-                'subject' => $subject,
-                'options' => $options
-            ]);
             
             return true;
             
